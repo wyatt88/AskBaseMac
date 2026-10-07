@@ -10,6 +10,7 @@ xcuserdata/
 __pycache__/
 *.pyc
 models/
+Originals/
 *.sqlite*
 *.db
 *.log
