@@ -1,0 +1,21 @@
+name: macOS
+on:
+  push:
+  pull_request:
+jobs:
+  build-test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run offline core tests
+        run: swift test
+      - name: Check model setup recovery and service ownership
+        run: python3 scripts/test_setup_guards.py
+      - name: Check embedding artifact integrity and process ownership
+        run: python3 services/embeddinggemma2/scripts/test_deployment_guards.py
+      - name: Build native application
+        run: python3 scripts/build_app.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AskBase-Local-macOS
+          path: dist/*.zip

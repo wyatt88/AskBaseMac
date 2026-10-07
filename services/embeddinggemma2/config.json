@@ -1,0 +1,21 @@
+{
+  "model_id": "embeddinggemma-2",
+  "repository": "google/embeddinggemma-2",
+  "revision": "914f7f89142e33e77833254d9c9b90c3cef7303b",
+  "model_directory": "models/914f7f89142e33e77833254d9c9b90c3cef7303b",
+  "backend": "mlx",
+  "backend_commit": "4f4634bb813c0298cb1467bed2e957526c71d0b4",
+  "dtype": "bfloat16",
+  "host": "127.0.0.1",
+  "port": 8871,
+  "dimensions": 768,
+  "supported_dimensions": [128, 256, 512, 768],
+  "max_tokens_per_input": 8192,
+  "max_batch_size": 8,
+  "max_request_bytes": 1048576,
+  "max_pending_requests": 4,
+  "query_prefix": "task: search result | query: ",
+  "document_prefix": "title: none | text: ",
+  "modalities_enabled": ["text"],
+  "inference_microbatch_size": 1
+}

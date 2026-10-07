@@ -1,0 +1,25 @@
+{
+  "date": "2026-10-07",
+  "version": "0.1.0",
+  "bundle_id": "cloud.doublewen.AskBaseMac",
+  "architecture": "arm64",
+  "codesign_verify_deep_strict": true,
+  "signature": "ad hoc; no Apple notarization",
+  "release_has_no_ui_verifier": true,
+  "installed_app_launch_confirmed": true,
+  "archive": "AskBase-Local-0.1.0-macOS-arm64.zip",
+  "archive_bytes": 1751787,
+  "archive_sha256": "dedb7cb8ebb00a7da69ab46cf67d739fe2267a36a0c4dd4e79e00bd5f244e3f3",
+  "embedding_health": {
+    "status": "ok",
+    "model": "embeddinggemma-2",
+    "dimensions": 768,
+    "revision": "914f7f89142e33e77833254d9c9b90c3cef7303b",
+    "encoder_signature": "0ea16f19627ece8078d464d0efc776527b40babba613412285f58080db0d1cce"
+  },
+  "local_answer_model": {
+    "name": "gemma4:31b-mlx",
+    "digest": "a22a363052da770302019d5afab29bd967f9318e4377bddd297421189ea09d7d",
+    "size": 19424434885
+  }
+}
