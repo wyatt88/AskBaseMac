@@ -2,6 +2,8 @@
 
 原生 macOS 本地知识库。把 PDF、Markdown、文字和代码留在自己的 Mac 上，用 **EmbeddingGemma 2** 搜索，再用本地回答模型做带来源的 RAG 问答。
 
+开源许可证：[Apache License 2.0](LICENSE)。
+
 这是一个独立的 macOS 应用项目，参考 AskBase 的资料库、检索和问答流程。它不会连接或同步云端 AskBase 的数据库。
 
 ![本机运行的 AskBase Local 知识问答界面](docs/screenshots/chat.png)
@@ -22,7 +24,7 @@
 
 ## 快速开始
 
-仓库成员可从 [Releases](https://github.com/wyatt88/AskBaseMac/releases) 下载 Apple Silicon 安装包，解压后把 `AskBase Local.app` 放入“应用程序”。模型服务单独准备，步骤见下文。
+从 [Releases](https://github.com/wyatt88/AskBaseMac/releases) 下载 Apple Silicon 安装包，解压后把 `AskBase Local.app` 放入“应用程序”。模型服务单独准备，步骤见下文。
 
 从源码构建：
 
@@ -36,7 +38,7 @@ python3 scripts/build_app.py --install
 open "$HOME/Applications/AskBase Local.app"
 ```
 
-构建脚本生成真正的 `.app`，安装到 `~/Applications`，并生成 `dist/AskBase-Local-0.1.0-macOS-arm64.zip`。应用使用本地临时签名，尚未做 Apple 开发者签名、公证或 App Store 发布。其他 Mac 下载预编译版本时可能需要在系统设置中允许打开；也可以直接从源码构建。
+构建脚本生成真正的 `.app`，安装到 `~/Applications`，并生成 `dist/AskBase-Local-0.1.1-macOS-arm64.zip`。构建副本保存在 `dist/build-products.noindex/`，避免与安装版同时出现在系统应用搜索中；许可文件随应用打包。应用使用本地临时签名，尚未做 Apple 开发者签名、公证或 App Store 发布。其他 Mac 下载预编译版本时可能需要在系统设置中允许打开；也可以直接从源码构建。
 
 ### EmbeddingGemma 2
 
@@ -112,3 +114,9 @@ swift run askbase smoke --model gemma4:31b-mlx
 - [第三方组件](THIRD_PARTY_NOTICES.md)
 
 CI 只构建应用和运行离线测试，不下载模型，也不访问私人资料。用户资料、权重、Python 环境、数据库和本地运行日志均在 Git 忽略规则内。
+
+## 开源许可
+
+本项目的原创代码、文档与应用素材采用 [Apache License 2.0](LICENSE)，允许商业使用、修改和再分发，并包含贡献者对其贡献所涉及专利的授权条款。再分发时须遵守许可证，包括保留许可与适用的归属声明、标明修改；详见 [NOTICE](NOTICE) 和许可证全文。
+
+EmbeddingGemma 2、Ollama、其他依赖和用户选择的回答模型分别遵循各自的许可证。本项目的许可证不替代模型或第三方组件的条款；模型权重和第三方运行环境不随应用分发。组件来源和许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

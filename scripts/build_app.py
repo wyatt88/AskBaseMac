@@ -24,7 +24,9 @@ def main():
         raise SystemExit(f"Refusing an arm64 package for unexpected binary architecture: {architecture}")
     distribution = ROOT / "dist"
     distribution.mkdir(exist_ok=True)
-    bundle = distribution / "AskBase Local.app"
+    staging = distribution / "build-products.noindex"
+    staging.mkdir(exist_ok=True)
+    bundle = staging / "AskBase Local.app"
     if bundle.exists():
         shutil.rmtree(bundle)
     macos = bundle / "Contents/MacOS"
@@ -37,25 +39,27 @@ def main():
     subprocess.run(["swift", str(ROOT / "scripts/make_icon.swift"), str(icon_directory)], check=True)
     shutil.copy2(icon_directory / "AppIcon.icns", resources)
     shutil.copytree(ROOT / "Examples", resources / "Examples")
+    for notice in ("LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"):
+        shutil.copy2(ROOT / notice, resources / notice)
     info = {
         "CFBundleIdentifier": BUNDLE_ID,
         "CFBundleName": "AskBase Local",
         "CFBundleDisplayName": "AskBase Local",
         "CFBundleExecutable": "AskBaseMac",
         "CFBundlePackageType": "APPL",
-        "CFBundleShortVersionString": "0.1.0",
-        "CFBundleVersion": "1",
+        "CFBundleShortVersionString": "0.1.1",
+        "CFBundleVersion": "2",
         "CFBundleIconFile": "AppIcon",
         "LSMinimumSystemVersion": "14.0",
         "NSHighResolutionCapable": True,
         "NSPrincipalClass": "NSApplication",
-        "NSHumanReadableCopyright": "Copyright © 2026 AskBase Local contributors.",
+        "NSHumanReadableCopyright": "Copyright © 2026 wyatt88 and AskBase Local contributors. Apache-2.0.",
         "NSAppTransportSecurity": {"NSAllowsLocalNetworking": True},
     }
     (bundle / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
     subprocess.run(["codesign", "--force", "--sign", "-", str(bundle)], check=True)
     subprocess.run(["codesign", "--verify", "--deep", "--strict", str(bundle)], check=True)
-    archive = distribution / "AskBase-Local-0.1.0-macOS-arm64.zip"
+    archive = distribution / "AskBase-Local-0.1.1-macOS-arm64.zip"
     if archive.exists():
         archive.unlink()
     subprocess.run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(bundle), str(archive)], check=True)

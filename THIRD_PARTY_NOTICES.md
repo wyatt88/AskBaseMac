@@ -1,8 +1,23 @@
 # Third-party components
 
-- **EmbeddingGemma 2** is developed by Google DeepMind. The model card at the pinned revision declares **Apache 2.0**. We download official weights and verify their published hashes; weights are not included in this repository. See [model card](https://huggingface.co/google/embeddinggemma-2/tree/914f7f89142e33e77833254d9c9b90c3cef7303b).
-- **MLX / MLX-VLM** provide local Apple Silicon inference. MLX-VLM is pinned to commit `4f4634bb813c0298cb1467bed2e957526c71d0b4`. Python dependency distributions retain their respective licenses.
-- **Ollama** is an external optional runtime for the answer model. Each selected model has its own license; answer model weights are not distributed here.
-- **SQLite** is used through the macOS system library. SwiftUI, AppKit, PDFKit and Accelerate are Apple system frameworks.
+AskBase Local's original source code, documentation, and application assets are
+licensed under [Apache License 2.0](LICENSE). This does not change the licenses of
+third-party components or separately downloaded models.
 
-This private application repository does not grant an open-source license for its own code. The repository owner can choose a license before public distribution.
+| Component | Use | License and source |
+| --- | --- | --- |
+| EmbeddingGemma 2, Google DeepMind | Separately downloaded embedding model | The [official model card](https://huggingface.co/google/embeddinggemma-2/tree/914f7f89142e33e77833254d9c9b90c3cef7303b) at revision `914f7f89142e33e77833254d9c9b90c3cef7303b` declares Apache-2.0. |
+| MLX 0.32.3, Apple | Separately installed Apple Silicon inference library | [MIT](https://github.com/ml-explore/mlx/blob/v0.32.3/LICENSE). |
+| MLX-VLM, Prince Canuma and contributors | Separately installed embedding-model loader | [MIT](https://github.com/Blaizzy/mlx-vlm/blob/4f4634bb813c0298cb1467bed2e957526c71d0b4/LICENSE), pinned to commit `4f4634bb813c0298cb1467bed2e957526c71d0b4`. |
+| Ollama | Optional, separately installed answer-model runtime | [MIT](https://github.com/ollama/ollama/blob/main/LICENSE). The runtime's license does not determine a selected model's license. |
+| SQLite | macOS system library | [Public domain](https://www.sqlite.org/copyright.html). |
+| SwiftUI, AppKit, PDFKit, Accelerate | Apple system frameworks | Provided by macOS under Apple's applicable terms; not relicensed by this project. |
+
+The repository and macOS application package do not include model weights,
+Ollama, or Python dependency distributions. The embedding setup downloads
+official model files, verifies their published hashes, and installs the versions
+in [requirements.lock.txt](services/embeddinggemma2/requirements.lock.txt).
+Those distributions retain their own license and copyright files.
+
+Answer models are selected and installed separately by the user. Check the
+chosen model's upstream terms before using or redistributing its weights.
