@@ -35,10 +35,15 @@ final class AppState: ObservableObject {
 
     @Published var searchQuery = ""
     @Published private(set) var searchedQuery = ""
+    @Published private(set) var searchMediaURL: URL?
+    @Published private(set) var searchedInput: SearchInput?
+    @Published private(set) var isChoosingSearchMedia = false
     @Published private(set) var searchResults: [SearchResult] = []
     @Published private(set) var hasSearched = false
     @Published private(set) var isSearching = false
+    @Published private(set) var isCancellingSearch = false
     @Published private(set) var searchError: String?
+    @Published private(set) var searchNotice: String?
 
     @Published private(set) var selectedConversationID: String?
     @Published private(set) var messages: [ChatMessage] = []
@@ -72,6 +77,8 @@ final class AppState: ObservableObject {
     private var progressTask: Task<Void, Never>?
     private var searchTask: Task<Void, Never>?
     private var searchToken: UUID?
+    private var mediaSearchPanel: NSOpenPanel?
+    private var mediaSearchPanelToken: UUID?
     private var answerTask: Task<Void, Never>?
     private var answerToken: UUID?
     private var answeringKnowledgeBaseID: String?
@@ -87,6 +94,16 @@ final class AppState: ObservableObject {
     init(root: URL = KnowledgeEngine.defaultRoot) {
         libraryRoot = root
     }
+
+    #if DEBUG
+    /// Used only by synthetic checks with explicitly injected offline clients.
+    convenience init(verificationEngine: KnowledgeEngine) {
+        self.init(root: verificationEngine.root)
+        engine = verificationEngine
+    }
+
+    var verificationSearchTask: Task<Void, Never>? { searchTask }
+    #endif
 
     func preventStartup(message: String) {
         launchFailure = message
@@ -132,10 +149,24 @@ final class AppState: ObservableObject {
     }
     var canImport: Bool {
         hasStarted && selectedKnowledgeBaseID != nil && importActivity == nil
-            && reindexActivity == nil && !isChoosingFiles && !isReadingDrop && !isDeleting && !isSavingSettings
+            && reindexActivity == nil && !isChoosingFiles && !isChoosingSearchMedia
+            && !isReadingDrop && !isDeleting && !isSavingSettings
     }
     var settingsAreLocked: Bool {
-        importActivity != nil || isAnswering || !reindexingDocumentIDs.isEmpty
+        importActivity != nil || isAnswering || isSearching || isChoosingSearchMedia
+            || !reindexingDocumentIDs.isEmpty
+    }
+    var canChooseSearchMedia: Bool {
+        hasStarted && selectedKnowledgeBaseID != nil && readyDocumentCount > 0
+            && !isSearching && !isChoosingSearchMedia && !isChoosingFiles && !isDeleting && !isSavingSettings
+    }
+    var canSearch: Bool {
+        hasStarted && selectedKnowledgeBaseID != nil && readyDocumentCount > 0
+            && !isSearching && !isChoosingSearchMedia && !isDeleting && !isSavingSettings
+            && (searchMediaURL != nil || !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+    var embeddingCapabilities: EmbeddingCapabilities {
+        EmbeddingCapabilities(status: modelStatus, checking: isCheckingConnections)
     }
     var canAsk: Bool {
         selectedKnowledgeBaseID != nil && readyDocumentCount > 0
@@ -201,6 +232,12 @@ final class AppState: ObservableObject {
             if let id = selectedDocumentID, !documents.contains(where: { $0.id == id }) {
                 selectedDocumentID = nil
             }
+            if case .source(let source) = sheet,
+               !documents.contains(where: { $0.id == source.documentID }) {
+                sheet = nil
+            }
+            let documentIDs = Set(documents.map(\.id))
+            searchResults.removeAll { !documentIDs.contains($0.documentID) }
             if let id = selectedNoteID, !notes.contains(where: { $0.id == id }) {
                 selectedNoteID = nil
             }
@@ -219,7 +256,13 @@ final class AppState: ObservableObject {
     func selectKnowledgeBase(_ id: String?) {
         guard id != selectedKnowledgeBaseID else { return }
         chatDrafts[chatDraftKey] = chatDraft
-        cancelSearch()
+        discardSearch()
+        mediaSearchPanelToken = nil
+        mediaSearchPanel?.cancel(nil)
+        mediaSearchPanel = nil
+        isChoosingSearchMedia = false
+        searchMediaURL = nil
+        if case .source = sheet { sheet = nil }
         abandonAnswer()
         messageTask?.cancel()
         messageToken = nil
@@ -234,7 +277,9 @@ final class AppState: ObservableObject {
         searchResults = []
         hasSearched = false
         searchedQuery = ""
+        searchedInput = nil
         searchError = nil
+        searchNotice = nil
         chatError = nil
         chatNotice = nil
         libraryFilter = ""
@@ -268,7 +313,7 @@ final class AppState: ObservableObject {
         guard canImport, let base = selectedKnowledgeBase else { return }
         let panel = NSOpenPanel()
         panel.title = "导入资料"
-        panel.message = "加入「\(base.name)」。可多选文件或文件夹，不限制大小、数量或扩展名；逐个提取文字。"
+        panel.message = "加入「\(base.name)」。支持文本、图片、音频、视频和文件夹；不设大小、数量或总时长配额，也不按扩展名筛选。按内容识别并检查模型能力，不支持的项目会说明原因。"
         panel.prompt = "导入"
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
@@ -427,6 +472,8 @@ final class AppState: ObservableObject {
                 do {
                     try await engine.reindex(documentID: document.id)
                     reindexActivity?.succeeded += 1
+                    searchResults.removeAll { $0.documentID == document.id }
+                    if case .source(let source) = sheet, source.documentID == document.id { sheet = nil }
                 } catch {
                     if error is CancellationError || Task.isCancelled { break }
                     reindexActivity?.failures.append("\(document.title)：\(error.localizedDescription)")
@@ -488,16 +535,39 @@ final class AppState: ObservableObject {
         return try await engine.documentChunks(documentID: documentID).sorted { $0.ordinal < $1.ordinal }
     }
 
+    /// Preview callers must use the same original-file validation as external opening.
+    /// Recheck the current library after the actor hop so a late read cannot revive
+    /// a deleted source or the previous knowledge base's preview.
+    func originalURL(for documentID: String) async throws -> URL {
+        guard let engine, let baseID = selectedKnowledgeBaseID,
+              documents.contains(where: { $0.id == documentID }) else {
+            throw AskBaseError.invalidInput("来源已移除或不在当前知识库中。")
+        }
+        let url = try await engine.originalURL(documentID: documentID)
+        try Task.checkCancellation()
+        guard selectedKnowledgeBaseID == baseID,
+              documents.contains(where: { $0.id == documentID }), url.isFileURL else {
+            throw AskBaseError.invalidInput("来源已移除或知识库已切换，请重新选择资料。")
+        }
+        return url
+    }
+
     func openOriginal(_ documentID: String, reveal: Bool = false) {
-        guard let engine else { return }
+        guard let document = documents.first(where: { $0.id == documentID }) else { return }
         Task {
             do {
-                let url = try await engine.originalURL(documentID: documentID)
+                let url = try await originalURL(for: documentID)
                 if reveal {
                     NSWorkspace.shared.activateFileViewerSelecting([url])
                 } else {
                     // Open code as text instead of letting a script's default handler execute it.
-                    let bundleID = url.pathExtension.lowercased() == "pdf" ? "com.apple.Preview" : "com.apple.TextEdit"
+                    let bundleID: String
+                    switch document.media?.kind {
+                    case .image: bundleID = "com.apple.Preview"
+                    case .audio, .video: bundleID = "com.apple.QuickTimePlayerX"
+                    case nil:
+                        bundleID = url.pathExtension.lowercased() == "pdf" ? "com.apple.Preview" : "com.apple.TextEdit"
+                    }
                     guard let application = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
                         throw AskBaseError.storage("未找到系统阅读器。可先在 Finder 中显示这份文件，再选择打开方式。")
                     }
@@ -509,41 +579,131 @@ final class AppState: ObservableObject {
         }
     }
 
+    func chooseMediaSearch() {
+        guard canChooseSearchMedia, let base = selectedKnowledgeBase else { return }
+        let panel = NSOpenPanel()
+        panel.title = "用媒体搜索"
+        panel.message = "选择本机图片、音频或视频，按文件内容搜索「\(base.name)」。不按扩展名筛选，全部片段参与检索；此文件不会导入资料库。"
+        panel.prompt = "搜索"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.showsHiddenFiles = true
+        panel.treatsFilePackagesAsDirectories = false
+        let token = UUID()
+        mediaSearchPanelToken = token
+        mediaSearchPanel = panel
+        isChoosingSearchMedia = true
+        searchNotice = nil
+        let completion: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            let selectedURL = panel.url
+            Task { @MainActor in
+                guard let self, self.mediaSearchPanelToken == token else { return }
+                self.mediaSearchPanelToken = nil
+                self.mediaSearchPanel = nil
+                self.isChoosingSearchMedia = false
+                guard self.selectedKnowledgeBaseID == base.id else { return }
+                guard response == .OK, let selectedURL else {
+                    self.searchNotice = "已取消选择媒体文件，当前查询保持不变。"
+                    return
+                }
+                self.selectSearchMedia(selectedURL)
+                self.runSearch()
+            }
+        }
+        if let window = NSApp.keyWindow {
+            panel.beginSheetModal(for: window, completionHandler: completion)
+        } else {
+            panel.begin(completionHandler: completion)
+        }
+    }
+
+    func selectSearchMedia(_ url: URL) {
+        guard url.isFileURL else {
+            searchError = "媒体搜索只接受本机文件。"
+            return
+        }
+        discardSearch()
+        searchMediaURL = url
+        clearSearchResults()
+    }
+
+    func useTextSearch() {
+        discardSearch()
+        searchMediaURL = nil
+        clearSearchResults()
+    }
+
+    private func clearSearchResults() {
+        searchResults = []
+        hasSearched = false
+        searchedQuery = ""
+        searchedInput = nil
+        searchError = nil
+        searchNotice = nil
+    }
+
     func runSearch() {
-        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty, let baseID = selectedKnowledgeBaseID, let engine else { return }
-        cancelSearch()
+        guard canSearch, let baseID = selectedKnowledgeBaseID, let engine else { return }
+        let input: SearchInput = searchMediaURL.map(SearchInput.media)
+            ?? .text(searchQuery.trimmingCharacters(in: .whitespacesAndNewlines))
         let token = UUID()
         searchToken = token
-        searchedQuery = query
+        searchedInput = input
+        if case .text(let query) = input { searchedQuery = query } else { searchedQuery = "" }
         searchResults = []
         hasSearched = true
         searchError = nil
+        searchNotice = nil
         isSearching = true
+        isCancellingSearch = false
         searchTask = Task {
+            let scopedURL: URL?
+            if case .media(let url) = input, url.startAccessingSecurityScopedResource() { scopedURL = url }
+            else { scopedURL = nil }
+            defer { scopedURL?.stopAccessingSecurityScopedResource() }
             do {
-                let results = try await engine.search(query: query, knowledgeBaseID: baseID)
+                let results: [SearchResult]
+                switch input {
+                case .text(let query):
+                    results = try await engine.search(query: query, knowledgeBaseID: baseID)
+                case .media(let url):
+                    results = try await engine.search(mediaURL: url, knowledgeBaseID: baseID)
+                }
                 try Task.checkCancellation()
                 guard searchToken == token, selectedKnowledgeBaseID == baseID else { return }
-                searchResults = results
+                let currentDocumentIDs = Set(documents.map(\.id))
+                searchResults = results.filter { currentDocumentIDs.contains($0.documentID) }
             } catch {
-                guard searchToken == token else { return }
-                if !(error is CancellationError), !Task.isCancelled {
+                guard searchToken == token, selectedKnowledgeBaseID == baseID else { return }
+                if error is CancellationError || Task.isCancelled {
+                    hasSearched = false
+                    searchNotice = "搜索已取消。查询已保留，可再次搜索。"
+                } else {
                     searchError = error.localizedDescription
                 }
             }
             guard searchToken == token else { return }
             isSearching = false
+            isCancellingSearch = false
             searchTask = nil
+            searchToken = nil
         }
     }
 
     func cancelSearch() {
+        guard isSearching else { return }
+        isCancellingSearch = true
+        searchTask?.cancel()
+    }
+
+    private func discardSearch() {
         searchTask?.cancel()
         searchTask = nil
         searchToken = nil
         if isSearching { hasSearched = false }
         isSearching = false
+        isCancellingSearch = false
     }
 
     func selectConversation(_ id: String?) {
@@ -782,6 +942,11 @@ final class AppState: ObservableObject {
                         throw AskBaseError.invalidInput("此知识库仍有任务在运行，请等待完成或停止任务后删除。")
                     }
                     let noteIDs = snapshot.notes.filter { $0.knowledgeBaseID == base.id }.map(\.id)
+                    if selectedKnowledgeBaseID == base.id {
+                        discardSearch()
+                        selectedDocumentID = nil
+                        if case .source = sheet { sheet = nil }
+                    }
                     stoppedNoteIDs = noteIDs
                     await stopNoteWriters(noteIDs)
                     defer { notesBeingRemoved.subtract(noteIDs) }
@@ -791,6 +956,9 @@ final class AppState: ObservableObject {
                     guard document.status != .indexing, !reindexingDocumentIDs.contains(document.id) else {
                         throw AskBaseError.invalidInput("资料正在建立索引，请等待完成后删除。")
                     }
+                    if selectedDocumentID == document.id { selectedDocumentID = nil }
+                    if case .source(let source) = sheet, source.documentID == document.id { sheet = nil }
+                    discardSearch()
                     try await engine.deleteDocument(id: document.id)
                     searchResults.removeAll { $0.documentID == document.id }
                 case .note(let note):

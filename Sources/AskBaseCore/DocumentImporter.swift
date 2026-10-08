@@ -80,6 +80,33 @@ public enum DocumentImporter {
         let snapshot = try snapshotInput(url)
         defer { snapshot.remove() }
         let pages = try DocumentTextExtractor.parse(url: snapshot.url, originalFilename: url.lastPathComponent)
+        return try prepared(snapshot: snapshot, original: url, knowledgeBaseID: knowledgeBaseID,
+                            originalsRoot: originalsRoot, pages: pages)
+    }
+
+    /// Media is identified from the stable file contents, before trying text
+    /// extraction. All positions refer to the exact bytes in the managed copy.
+    public static func prepareForImport(
+        url: URL, knowledgeBaseID: String, originalsRoot: URL
+    ) async throws -> PreparedDocument {
+        guard !knowledgeBaseID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AskBaseError.invalidInput("请选择知识库。")
+        }
+        let snapshot = try snapshotInput(url)
+        defer { snapshot.remove() }
+        if let plan = try await MediaProcessor.inspect(url: snapshot.url) {
+            return try prepared(snapshot: snapshot, original: url, knowledgeBaseID: knowledgeBaseID,
+                                originalsRoot: originalsRoot, media: plan)
+        }
+        let pages = try DocumentTextExtractor.parse(url: snapshot.url, originalFilename: url.lastPathComponent)
+        return try prepared(snapshot: snapshot, original: url, knowledgeBaseID: knowledgeBaseID,
+                            originalsRoot: originalsRoot, pages: pages)
+    }
+
+    private static func prepared(
+        snapshot: InputSnapshot, original url: URL, knowledgeBaseID: String, originalsRoot: URL,
+        pages: [ParsedPage] = [], media: MediaPlan? = nil
+    ) throws -> PreparedDocument {
         try Task.checkCancellation()
         let id = UUID().uuidString
         let ext = url.pathExtension.lowercased()
@@ -92,9 +119,14 @@ public enum DocumentImporter {
         // Preserve useful extensions, while accommodating an original whose
         // extension alone would exceed the filesystem's component length.
         let filename = candidate.utf8.count <= 255 ? candidate : id
-        let chunks = try TextChunker.cancellableChunks(pages: pages, documentID: id,
+        let chunks: [DocumentChunk]
+        if let media {
+            chunks = try mediaChunks(plan: media, documentID: id, knowledgeBaseID: knowledgeBaseID)
+        } else {
+            chunks = try TextChunker.cancellableChunks(pages: pages, documentID: id,
                                                        knowledgeBaseID: knowledgeBaseID)
-        guard !chunks.isEmpty else { throw AskBaseError.importFailed("文件没有可索引的文字。") }
+        }
+        guard !chunks.isEmpty else { throw AskBaseError.importFailed("文件没有可索引的文字或媒体。") }
         // Hash, extraction, and the managed copy use the same stable snapshot.
         // Rejected files leave no managed copies behind.
         try OriginalFileStorage.copy(snapshot.url, filename: filename, directory: originalsRoot)
@@ -102,10 +134,41 @@ public enum DocumentImporter {
             document: LibraryDocument(
                 id: id, knowledgeBaseID: knowledgeBaseID,
                 title: title, fileName: originalName, relativePath: "Originals/\(filename)",
-                contentHash: snapshot.contentHash, byteCount: snapshot.byteCount
+                contentHash: snapshot.contentHash, byteCount: snapshot.byteCount, media: media?.reference
             ),
             chunks: chunks
         )
+    }
+
+    static func mediaChunks(plan: MediaPlan, documentID: String, knowledgeBaseID: String) throws -> [DocumentChunk] {
+        guard plan.reference.isValid, !plan.segments.isEmpty else {
+            throw AskBaseError.importFailed("媒体没有可索引的画面或时间段。")
+        }
+        return try plan.segments.enumerated().map { ordinal, reference in
+            try Task.checkCancellation()
+            guard reference.isValid, reference.kind == plan.reference.kind else {
+                throw AskBaseError.importFailed("媒体分段位置无效。")
+            }
+            return DocumentChunk(documentID: documentID, knowledgeBaseID: knowledgeBaseID,
+                                 ordinal: ordinal, text: mediaPlaceholder(reference), media: reference)
+        }
+    }
+
+    static func mediaPlaceholder(_ reference: MediaReference) -> String {
+        "\(reference.kind.label) · \(reference.positionLabel)（媒体语义索引，无文字转写）"
+    }
+
+    /// Keep the same snapshot alive across asynchronous segment preparation.
+    /// expectedHash protects reindexing against externally replaced originals.
+    static func withSnapshot<T>(
+        url: URL, expectedHash: String? = nil, operation: (URL) async throws -> T
+    ) async throws -> T {
+        let snapshot = try snapshotInput(url)
+        defer { snapshot.remove() }
+        if let expectedHash, expectedHash != snapshot.contentHash {
+            throw AskBaseError.importFailed("资料副本的内容已改变，请重新导入；旧索引已保留。")
+        }
+        return try await operation(snapshot.url)
     }
 
     public static func parse(url: URL, originalFilename: String? = nil) throws -> [ParsedPage] {
@@ -141,7 +204,7 @@ public enum DocumentImporter {
         guard fstat(descriptor, &before) == 0, (before.st_mode & S_IFMT) == S_IFREG else {
             throw AskBaseError.importFailed("只能导入普通文件，不支持目录、设备或管道。")
         }
-        guard before.st_size > 0 else { throw AskBaseError.importFailed("文件为空，没有可索引的文字。") }
+        guard before.st_size > 0 else { throw AskBaseError.importFailed("文件为空，没有可索引的内容。") }
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("AskBase-Import-\(UUID())", isDirectory: true)
         do {

@@ -9,75 +9,94 @@ struct DocumentDetailView: View {
     @State private var loading = false
     @State private var loadError: String?
     @State private var editingMetadata = false
+    @State private var selectedChunkID: String?
+    @State private var loadedKey: String?
+    @State private var previewSelectionRevision = 0
 
     private var document: LibraryDocument? {
-        state.snapshot.documents.first { $0.id == documentID }
+        state.documents.first { $0.id == documentID }
     }
     private var loadKey: String {
-        "\(documentID):\(document?.updatedAt.timeIntervalSince1970 ?? 0):\(document?.chunkCount ?? 0)"
+        "\(state.selectedKnowledgeBaseID ?? ""):\(documentID):\(document?.updatedAt.timeIntervalSince1970 ?? 0):\(document?.chunkCount ?? 0):\(source?.id ?? "")"
+    }
+    private var previewMedia: MediaReference? {
+        if loadedKey == loadKey, let selectedChunkID,
+           let media = chunks.first(where: { $0.id == selectedChunkID })?.media {
+            return media
+        }
+        return source?.media ?? document?.media
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 23) {
-                if let document {
-                    header(document)
-                    if let error = document.errorMessage, document.status == .failed {
-                        ErrorPanel(title: "索引未完成", message: error, actionTitle: "重试索引",
-                                   isActionDisabled: state.reindexActivity != nil || state.importActivity != nil) {
-                            state.reindex(document)
-                        }
-                    }
-                    if document.status == .indexing || state.reindexActivity?.currentDocumentID == document.id {
-                        HStack(spacing: 10) {
-                            ProgressView().controlSize(.small)
-                            Text("正在为资料建立检索索引…").font(.callout).foregroundStyle(.secondary)
-                        }
-                    } else if state.reindexingDocumentIDs.contains(document.id) {
-                        Label("已加入队列，等待重新索引", systemImage: "clock")
-                            .font(.callout).foregroundStyle(.secondary)
-                    }
-                } else {
-                    Label("来源已移除", systemImage: "doc.badge.ellipsis").font(.headline)
-                    Text("这份资料已不在当前资料库中，无法打开原始文件。")
-                        .foregroundStyle(.secondary)
-                }
-                if let source {
-                    sourceExcerpt(source)
-                }
-                if document != nil {
-                    Divider()
-                    HStack {
-                        Text("文档内容").font(.headline)
-                        Spacer()
-                        if !chunks.isEmpty {
-                            Text("\(chunks.count) 个片段").font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    if loading {
-                        HStack(spacing: 10) {
-                            ProgressView().controlSize(.small)
-                            Text("正在读取内容…").foregroundStyle(.secondary)
-                        }.padding(.vertical, 18)
-                    } else if let loadError {
-                        ErrorPanel(title: "无法读取内容", message: loadError, actionTitle: "重新读取") {
-                            Task { await loadChunks() }
-                        }
-                    } else if chunks.isEmpty {
-                        Text(document?.status == .ready ? "当前没有可显示的文字片段。" : "索引完成后，这里会显示可检索的文字。你仍可打开已保存的原始文件。")
-                            .font(.callout).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    } else {
-                        LazyVStack(alignment: .leading, spacing: 20) {
-                            ForEach(chunks) { chunk in
-                                chunkContent(chunk)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 23) {
+                    if let document {
+                        header(document)
+                        if let error = document.errorMessage, document.status == .failed {
+                            ErrorPanel(title: "索引未完成", message: error, actionTitle: "重试索引",
+                                       isActionDisabled: state.reindexActivity != nil || state.importActivity != nil) {
+                                state.reindex(document)
                             }
                         }
+                        if document.status == .indexing || state.reindexActivity?.currentDocumentID == document.id {
+                            HStack(spacing: 10) {
+                                ProgressView().controlSize(.small)
+                                Text("正在为资料建立检索索引…").font(.callout).foregroundStyle(.secondary)
+                            }
+                        } else if state.reindexingDocumentIDs.contains(document.id) {
+                            Label("已加入队列，等待重新索引", systemImage: "clock")
+                                .font(.callout).foregroundStyle(.secondary)
+                        }
+                        if let media = previewMedia {
+                            MediaPreviewView(document: document, media: media,
+                                             selectionRevision: previewSelectionRevision)
+                                .id("media-preview")
+                        }
+                        if let source {
+                            sourceExcerpt(source)
+                        }
+                        Divider()
+                        HStack {
+                            Text(document.media == nil ? "文档内容" : "索引片段").font(.headline)
+                            Spacer()
+                            if loadedKey == loadKey, !chunks.isEmpty {
+                                Text("\(chunks.count) 个片段").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        if loading {
+                            HStack(spacing: 10) {
+                                ProgressView().controlSize(.small)
+                                Text("正在读取内容…").foregroundStyle(.secondary)
+                            }.padding(.vertical, 18)
+                        } else if let loadError {
+                            ErrorPanel(title: "无法读取内容", message: loadError, actionTitle: "重新读取") {
+                                Task { await loadChunks() }
+                            }
+                        } else if loadedKey != loadKey || chunks.isEmpty {
+                            Text(document.status == .ready ? "当前没有可显示的索引片段。" : "索引完成后，这里会显示可检索的片段。你仍可查看已保存的原始文件。")
+                                .font(.callout).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        } else {
+                            LazyVStack(alignment: .leading, spacing: 20) {
+                                ForEach(chunks) { chunk in
+                                    chunkContent(chunk) {
+                                        selectedChunkID = chunk.id
+                                        previewSelectionRevision += 1
+                                        withAnimation { proxy.scrollTo("media-preview", anchor: .top) }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        Label("来源已移除", systemImage: "doc.badge.ellipsis").font(.headline)
+                        Text("这份资料已不在当前知识库中，无法继续显示旧片段或预览。")
+                            .foregroundStyle(.secondary)
                     }
                 }
+                .padding(25)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(25)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(AppPalette.surface)
         .task(id: loadKey) { await loadChunks() }
@@ -102,6 +121,10 @@ struct DocumentDetailView: View {
             }
             Text(document.fileName).font(.callout).foregroundStyle(.secondary)
                 .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            if let media = document.media {
+                Label("\(media.kind.label) · \(MediaEvidence.position(for: media))", systemImage: media.kind.symbol)
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             HStack(spacing: 8) {
                 DocumentStatusLabel(status: document.status,
                                     reindexing: state.reindexActivity?.currentDocumentID == document.id,
@@ -143,50 +166,87 @@ struct DocumentDetailView: View {
     private func sourceExcerpt(_ source: SearchResult) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Label("所选引用", systemImage: "quote.opening").font(.callout.weight(.semibold))
+                Label("检索命中片段", systemImage: source.media?.kind.symbol ?? "quote.opening")
+                    .font(.callout.weight(.semibold))
                 Spacer()
-                if let page = source.page {
+                if let media = source.media {
+                    Text(MediaEvidence.position(for: media)).font(.caption).foregroundStyle(.secondary)
+                } else if let page = source.page {
                     Text("第 \(page) 页").font(.caption).foregroundStyle(.secondary)
                 }
-                CopyTextButton(text: source.text)
+                if source.hasReadableEvidence, MediaEvidence.isReadable(text: source.text, media: source.media) {
+                    CopyTextButton(text: source.text)
+                }
             }
-            Text(source.text).font(.body).lineSpacing(5).textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+            if source.hasReadableEvidence, MediaEvidence.isReadable(text: source.text, media: source.media) {
+                if let label = source.media?.textSource?.label {
+                    Label(label, systemImage: "text.viewfinder").font(.caption).foregroundStyle(AppPalette.accent)
+                }
+                Text(source.text).font(.body).lineSpacing(5).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let media = source.media {
+                Text(MediaEvidence.summary(for: media)).font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(17)
         .background(AppPalette.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(AppPalette.accent.opacity(0.16)))
     }
 
-    private func chunkContent(_ chunk: DocumentChunk) -> some View {
+    private func chunkContent(_ chunk: DocumentChunk, select: @escaping () -> Void) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(chunk.page.map { "第 \($0) 页 · 片段 \(chunk.ordinal + 1)" } ?? "片段 \(chunk.ordinal + 1)")
+                Text(chunk.media.map { "\($0.kind.label) · \(MediaEvidence.position(for: $0)) · 片段 \(chunk.ordinal + 1)" }
+                     ?? chunk.page.map { "第 \($0) 页 · 片段 \(chunk.ordinal + 1)" } ?? "片段 \(chunk.ordinal + 1)")
                     .font(.caption.weight(.medium)).foregroundStyle(.secondary)
                 Spacer()
-                CopyTextButton(text: chunk.text)
+                if MediaEvidence.isReadable(text: chunk.text, media: chunk.media) {
+                    CopyTextButton(text: chunk.text)
+                }
             }
-            Text(chunk.text).font(.body).lineSpacing(5).textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if let media = chunk.media {
+                Button(action: select) {
+                    Label(media.kind == .image ? "查看这一帧／页" : "定位到这个片段",
+                          systemImage: media.kind == .image ? "photo" : "play.rectangle")
+                }
+                .controlSize(.small)
+                .accessibilityIdentifier("previewChunk-\(chunk.id)")
+            }
+            if MediaEvidence.isReadable(text: chunk.text, media: chunk.media) {
+                if let label = chunk.media?.textSource?.label {
+                    Label(label, systemImage: "text.viewfinder").font(.caption).foregroundStyle(AppPalette.accent)
+                }
+                Text(chunk.text).font(.body).lineSpacing(5).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if let media = chunk.media {
+                Text(MediaEvidence.summary(for: media)).font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Divider().padding(.top, 3)
         }
         .id(chunk.id)
     }
 
     private func loadChunks() async {
-        guard document != nil else { chunks = []; return }
+        let key = loadKey
+        chunks = []
+        loadedKey = nil
+        selectedChunkID = nil
+        guard document != nil else { loading = false; loadError = nil; return }
         loading = true
         loadError = nil
+        defer { if loadKey == key { loading = false } }
         do {
             let result = try await state.chunks(for: documentID)
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, loadKey == key, document != nil else { return }
             chunks = result
+            loadedKey = key
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, loadKey == key, document != nil else { return }
             loadError = error.localizedDescription
         }
-        loading = false
     }
 }
 
@@ -197,12 +257,14 @@ struct SourceDetailSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Label("引用来源", systemImage: "doc.text.magnifyingglass").font(.headline)
+                Label(source.media.map { "\($0.kind.label)来源" } ?? "引用来源",
+                      systemImage: source.media?.kind.symbol ?? "doc.text.magnifyingglass").font(.headline)
                 Spacer()
                 Button("完成") { dismiss() }.keyboardShortcut(.cancelAction)
             }.padding(20)
             Divider()
             DocumentDetailView(documentID: source.documentID, source: source)
+                .id(source.id)
         }
         .frame(width: 780, height: 630)
         .background(AppPalette.canvas)

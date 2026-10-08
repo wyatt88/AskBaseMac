@@ -33,6 +33,16 @@ struct ChatView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 24).padding(.bottom, 10)
                     }
+                    if state.documents.contains(where: { $0.media != nil }) {
+                        HStack(alignment: .top, spacing: 10) {
+                            Text("问答使用真实文字或 OCR；没有转写的媒体请到搜索中查看原图或播放片段核对。")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 0)
+                            Button("去搜索") { state.section = .search }.controlSize(.small)
+                        }
+                        .padding(.horizontal, 24).padding(.bottom, 10)
+                    }
                     composer
                 }
                 .frame(minWidth: 440, maxWidth: .infinity, maxHeight: .infinity)
@@ -137,7 +147,7 @@ struct ChatView: View {
     @ViewBuilder private var conversationEmptyState: some View {
         if state.readyDocumentCount == 0 {
             EmptyState(symbol: "bubble.left.and.text.bubble.right", title: "先为对话准备资料",
-                       detail: "导入资料并完成索引后，就可以提问。回答附有检索来源，便于回到原文核对。") {
+                       detail: "导入资料并完成索引后，可以依据真实文字或 OCR 提问。没有文字的图片、音频和视频，可到搜索中查看或播放核对。") {
                 Button(state.documents.isEmpty ? "导入资料…" : "查看资料库") {
                     if state.documents.isEmpty { state.chooseImport() }
                     else { state.section = .library }

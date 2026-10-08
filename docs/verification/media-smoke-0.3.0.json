@@ -1,0 +1,139 @@
+{
+  "checks": {
+    "all_documents_committed_ready": true,
+    "audio_not_presented_as_transcript": true,
+    "audio_query_returns_audio_source": true,
+    "audio_three_segments_with_tail": true,
+    "deleted_media_not_retrieved": true,
+    "finite_normalized_768d_vectors": true,
+    "four_modalities_ready": true,
+    "image_query_self_match_first": true,
+    "knowledge_base_isolation": true,
+    "managed_copy_removed_original_retained": true,
+    "media_base_delete_cascades": true,
+    "media_duplicate_skipped": true,
+    "media_positions_persist_after_reopen": true,
+    "media_reindex_complete": true,
+    "media_signature_and_recipe": true,
+    "queries_do_not_import_files": true,
+    "real_ocr_text_labeled": true,
+    "shared_text_space": true,
+    "silent.mov_audio_presence": true,
+    "silent.mov_frame_provenance": true,
+    "silent.mov_two_segments_with_tail": true,
+    "six_documents_ready": true,
+    "text_query_returns_media": true,
+    "video_query_returns_video_source": true,
+    "with-audio.mov_audio_presence": true,
+    "with-audio.mov_frame_provenance": true,
+    "with-audio.mov_two_segments_with_tail": true
+  },
+  "limits": "Engineering and synthetic self-retrieval only; no speech transcription or natural-media quality benchmark.",
+  "observations": {
+    "audio_ranges": [
+      [
+        0,
+        10
+      ],
+      [
+        10,
+        20
+      ],
+      [
+        20,
+        20.25
+      ]
+    ],
+    "import_failures": [],
+    "media_query_results": {
+      "audio": [
+        "tone · 00:20–00:20.250",
+        "tone · 00:10–00:20",
+        "tone · 00:00–00:10",
+        "with-audio · 00:00–00:10",
+        "with-audio · 00:10–00:10.250",
+        "silent · 00:00–00:10"
+      ],
+      "image": [
+        "red-circle · 图片",
+        "silent · 00:00–00:10",
+        "with-audio · 00:00–00:10",
+        "silent · 00:10–00:10.250",
+        "with-audio · 00:10–00:10.250",
+        "tone · 00:20–00:20.250"
+      ],
+      "video": [
+        "silent · 00:10–00:10.250",
+        "silent · 00:00–00:10",
+        "with-audio · 00:00–00:10",
+        "with-audio · 00:10–00:10.250",
+        "red-circle · 图片",
+        "tone · 00:10–00:20"
+      ]
+    },
+    "poster_ocr": [
+      "ASKBASE PROJECT\nDeadline: October 18\nBudget: 30000 dollars"
+    ],
+    "silent.mov_frames": [
+      [
+        0.625,
+        1.875,
+        3.125,
+        4.375,
+        5.625,
+        6.875,
+        8.125,
+        9.375
+      ],
+      [
+        10.125
+      ]
+    ],
+    "text_query_results": [
+      {
+        "score": 0.7987190143267313,
+        "source": "red-circle · 图片"
+      },
+      {
+        "score": 0.7219243772824605,
+        "source": "with-audio · 00:00–00:10"
+      },
+      {
+        "score": 0.6873241662979126,
+        "source": "silent · 00:00–00:10"
+      },
+      {
+        "score": 0.6721026428540547,
+        "source": "tone · 00:20–00:20.250"
+      },
+      {
+        "score": 0.6599114068349202,
+        "source": "with-audio · 00:10–00:10.250"
+      },
+      {
+        "score": 0.6383870371182759,
+        "source": "reference"
+      }
+    ],
+    "with-audio.mov_frames": [
+      [
+        0.625,
+        1.875,
+        3.125,
+        4.375,
+        5.625,
+        6.875,
+        8.125,
+        9.375
+      ],
+      [
+        10.125
+      ]
+    ]
+  },
+  "passed": 27,
+  "protocol": "MM03-P1",
+  "seconds": 35.008500933647156,
+  "test_data": "Generated shapes, poster, tones and color video; isolated temporary library removed on exit.",
+  "total": 27
+}

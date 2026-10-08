@@ -1,0 +1,43 @@
+{
+  "timestamp": "2026-10-08T17:24:04.267896+00:00",
+  "checks": {
+    "all_ten_text_documents_imported": true,
+    "unsupported_binary_isolated": true,
+    "no_unexpected_duplicates": true,
+    "one_encoder_signature": true,
+    "valid_768d_vectors": true,
+    "complete_text_and_original:兰花.custom": true,
+    "complete_text_and_original:README": true,
+    "complete_text_and_original:紫杉.data": true,
+    "complete_text_and_original:Maple.rtf": true,
+    "complete_text_and_original:石榴.html": true,
+    "complete_text_and_original:青禾.docx": true,
+    "complete_text_and_original:春柳.xlsx": true,
+    "complete_text_and_original:星桥.pptx": true,
+    "complete_text_and_original:红杉.odt": true,
+    "complete_text_and_original:银杏.epub": true,
+    "retrieved:Q782": true,
+    "retrieved:9000 元": true,
+    "retrieved:CL73": true
+  },
+  "formats": {
+    "兰花.custom": true,
+    "README": true,
+    "紫杉.data": true,
+    "Maple.rtf": true,
+    "石榴.html": true,
+    "青禾.docx": true,
+    "春柳.xlsx": true,
+    "星桥.pptx": true,
+    "红杉.odt": true,
+    "银杏.epub": true
+  },
+  "passed": 18,
+  "total": 18,
+  "encoder_signatures": [
+    "0ea16f19627ece8078d464d0efc776527b40babba613412285f58080db0d1cce"
+  ],
+  "seconds": 1.3106170831015334,
+  "scope": "synthetic local import/storage/retrieval check; not a corpus quality or capacity benchmark",
+  "library": "fresh disposable directory; removed after verification"
+}

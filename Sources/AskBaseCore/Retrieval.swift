@@ -18,7 +18,8 @@ public enum Retrieval {
         let terms = lexicalTerms(query)
         let ranked = chunks.map { chunk -> (DocumentChunk, Double) in
             let semantic = cosine(vector, chunk.embedding)
-            let text = (titles[chunk.documentID, default: ""] + "\n" + chunk.text).lowercased()
+            let content = chunk.media == nil || chunk.media?.textSource != nil ? chunk.text : ""
+            let text = (titles[chunk.documentID, default: ""] + "\n" + content).lowercased()
             let matched = terms.filter { text.contains($0) }.count
             let lexical = terms.isEmpty ? 0 : Double(matched) / Double(terms.count)
             return (chunk, semantic + 0.08 * lexical)
@@ -26,12 +27,14 @@ public enum Retrieval {
             if left.1 == right.1 { return left.0.id < right.0.id }
             return left.1 > right.1
         }
-        // Suppress identical text or duplicate chunk positions within one document.
+        // Equal media labels/OCR do not imply equal positions: keep each hit's
+        // original timestamp or image frame. Text-only duplicates still collapse.
         var selected: [(DocumentChunk, Double)] = []
         for item in ranked {
             let isDuplicate = selected.contains {
                 $0.0.documentID == item.0.documentID &&
-                ($0.0.text == item.0.text || abs($0.0.ordinal - item.0.ordinal) < 1)
+                (($0.0.media == nil && item.0.media == nil && $0.0.text == item.0.text)
+                 || $0.0.ordinal == item.0.ordinal)
             }
             if !isDuplicate { selected.append(item) }
             if selected.count >= max(1, min(limit, 12)) { break }
@@ -40,7 +43,7 @@ public enum Retrieval {
             SearchResult(id: chunk.id, documentID: chunk.documentID,
                          knowledgeBaseID: chunk.knowledgeBaseID,
                          title: titles[chunk.documentID, default: "未命名资料"],
-                         text: chunk.text, page: chunk.page, score: score)
+                         text: chunk.text, page: chunk.page, score: score, media: chunk.media)
         }
     }
 

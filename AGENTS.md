@@ -25,8 +25,12 @@ real library. Build the app with `python3 scripts/build_app.py`.
 - Query and document prefixes are different and supplied by the embedding service.
 - Bind embeddings to the actual encoder signature plus dimensions. Querying across
   incompatible spaces must fail clearly; support deliberate document reindexing.
-- Ready means useful nonempty text and a complete committed vector set. Preserve the
-  previous usable index if reindexing fails.
+- Ready means extracted text or decodable native media, with a complete committed
+  vector set. Media must cover every planned frame/page or contiguous time segment;
+  preserve its media signature, preprocessing recipe and source positions. Preserve
+  the previous usable index if reindexing fails.
+- Media labels and filenames are not transcripts. Only actual text or labeled OCR
+  may enter text RAG. Keep native media retrieval usable without a chat/ASR model.
 - Deletion and updates must invalidate corresponding search entries and saved citations.
 - No auto-importing user folders, no automatic promotion of generated answers to sources.
 - Keep model weights, Python environments, logs, credentials and user data out of Git.

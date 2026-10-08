@@ -38,6 +38,9 @@ enum AppSmokeVerifier {
             if args.contains("--ui-empty-only") {
                 await finishVerification(state: state, succeeded: true)
             }
+            for (key, passed) in try await MediaUIVerifier.run(includePlayerChecks: true) {
+                checks["media_" + key] = passed
+            }
             guard let examples = Bundle.main.resourceURL?.appendingPathComponent("Examples"),
                   let base = state.selectedKnowledgeBase else { throw AskBaseError.storage("Bundled examples unavailable.") }
             state.importDocuments([examples], into: base)
@@ -68,6 +71,11 @@ enum AppSmokeVerifier {
                 state.sheet = nil
                 try await settle()
             }
+            try await verifyNativeMedia(
+                state: state, originalBase: base, output: output,
+                fixtures: root.deletingLastPathComponent().appendingPathComponent("native-media-fixtures"),
+                checks: &checks
+            )
             state.section = .chat
             state.chatDraft = "北辰计划的审核截止日是哪天，由谁负责？"
             state.ask()
@@ -116,6 +124,10 @@ enum AppSmokeVerifier {
                 "capture_method": "AppKit cacheDisplay of the actual app-owned window; debug build",
                 "input_method": "native AppState action handlers; not external mouse/keyboard automation",
                 "library_isolation": "fresh synthetic library explicitly selected at launch",
+                "native_media_requests_planned": 4,
+                "native_media_fixtures": "one PNG frame and one two-second WAV; separate knowledge base in the fresh smoke library",
+                "native_media_preview_method": "actual DocumentDetailView and SourceDetailSheet via MediaPreviewProbe; no helper-only preview substitution",
+                "media_limits": "no live video UI or file-panel mouse/keyboard automation; backend video is a separate core integration check",
                 "shutdown_method": "explicit debug-only note flush and process exit; normal application quit not evaluated",
             ]
             let data = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
@@ -129,6 +141,160 @@ enum AppSmokeVerifier {
             }
         }
         await finishVerification(state: state, succeeded: succeeded)
+    }
+
+    private static func verifyNativeMedia(
+        state: AppState, originalBase: KnowledgeBase, output: URL, fixtures: URL,
+        checks: inout [String: Bool]
+    ) async throws {
+        let files = try MediaUIVerifier.makeNativeSmokeFixtures(in: fixtures)
+        // Confirm the planned budget before submitting any media to the service.
+        for url in [files.image, files.audio] {
+            guard let plan = try await MediaProcessor.inspect(url: url), plan.segments.count == 1 else {
+                throw AskBaseError.invalidInput("Native media smoke requires exactly one segment per synthetic file (four media embeddings total).")
+            }
+        }
+        try await state.saveKnowledgeBase(name: "媒体 UI 合成验收", existing: nil)
+        guard let mediaBase = state.selectedKnowledgeBase else { throw AskBaseError.storage("Synthetic media knowledge base unavailable.") }
+        defer {
+            state.sheet = nil
+            state.selectKnowledgeBase(originalBase.id)
+            state.useTextSearch()
+        }
+        state.importDocuments([files.image, files.audio], into: mediaBase)
+        try await wait(until: { state.importActivity == nil }, timeout: 180)
+        checks["native_media_import_has_no_failures"] = state.importOutcome?.report.failures.isEmpty == true
+            && state.importOutcome?.error == nil
+        guard let image = state.documents.first(where: { $0.media?.kind == .image && $0.status == .ready }),
+              let audio = state.documents.first(where: { $0.media?.kind == .audio && $0.status == .ready }) else {
+            throw AskBaseError.storage("Native media import did not produce both ready fixtures: \(state.importOutcome?.plainText ?? "no outcome")")
+        }
+        checks["native_media_import_handler_indexed_fixtures"] = state.readyDocumentCount == 2
+            && image.chunkCount == 1 && audio.chunkCount == 1
+        state.dismissImportOutcome()
+        state.notice = nil
+        state.section = .library
+        state.selectedDocumentID = image.id
+        let imageDetail = try await presentedPreview(documentID: image.id, image: true)
+        checks["native_image_document_detail_loaded"] = imageDetail.image != nil && imageDetail.imageIndex == 0
+        try await settle()
+        try capture("10-media-image-library", to: output)
+
+        state.section = .search
+        try await wait(until: {
+            imageDetail.image == nil && MediaPreviewProbe.controller(for: image.id) == nil
+        }, timeout: 10)
+        checks["native_leave_image_detail_clears_preview"] = true
+        state.selectSearchMedia(files.image)
+        state.runSearch()
+        try await wait(until: { !state.isSearching }, timeout: 180)
+        checks["native_image_file_search_has_no_error"] = state.searchError == nil
+            && state.searchedInput == .media(files.image) && state.searchedQuery.isEmpty
+        guard let imageSource = state.searchResults.first(where: { $0.documentID == image.id }) else {
+            throw AskBaseError.storage("Native image query did not return its synthetic image source: \(state.searchError ?? "no match")")
+        }
+        checks["native_image_source_carries_real_ocr"] = imageSource.media?.textSource == .ocr
+            && imageSource.hasReadableEvidence && !imageSource.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        try await settle()
+        try capture("11-media-image-search", to: output)
+        state.sheet = .source(imageSource)
+        let imageSheet = try await presentedPreview(documentID: image.id, image: true)
+        checks["native_image_source_preview_matches_frame"] = imageSheet.imageIndex == (imageSource.media?.imageIndex ?? 0)
+        try await settle()
+        try capture("12-media-image-source", to: output, sheet: true)
+        state.sheet = nil
+        try await wait(until: {
+            imageSheet.image == nil && MediaPreviewProbe.controller(for: image.id) == nil && !hasPresentedSheet
+        }, timeout: 10)
+        checks["native_image_sheet_close_clears_preview"] = imageSheet.image == nil
+        try await settle()
+
+        state.section = .library
+        state.selectedDocumentID = audio.id
+        let audioDetail = try await presentedPreview(documentID: audio.id, image: false)
+        checks["native_audio_document_detail_paused"] = audioDetail.player?.rate == 0 && !audioDetail.isPlaying
+        try await settle()
+        try capture("13-media-audio-library", to: output)
+        state.section = .search
+        let detailPlayer = audioDetail.player
+        try await wait(until: {
+            audioDetail.player == nil && MediaPreviewProbe.controller(for: audio.id) == nil
+        }, timeout: 10)
+        checks["native_leave_audio_detail_releases_player"] = detailPlayer != nil
+            && detailPlayer?.rate == 0 && detailPlayer?.currentItem == nil
+        state.selectSearchMedia(files.audio)
+        state.runSearch()
+        try await wait(until: { !state.isSearching }, timeout: 180)
+        checks["native_audio_file_search_has_no_error"] = state.searchError == nil
+            && state.searchedInput == .media(files.audio) && state.searchedQuery.isEmpty
+        guard let audioSource = state.searchResults.first(where: { $0.documentID == audio.id }),
+              let start = audioSource.media?.startSeconds, let end = audioSource.media?.endSeconds else {
+            throw AskBaseError.storage("Native audio query did not return its timed source: \(state.searchError ?? "no match")")
+        }
+        checks["native_audio_not_labeled_as_transcript"] = !audioSource.hasReadableEvidence
+            && audioSource.media?.textSource == nil
+        try await settle()
+        try capture("14-media-audio-search", to: output)
+        state.sheet = .source(audioSource)
+        let audioSheet = try await presentedPreview(documentID: audio.id, image: false)
+        checks["native_audio_source_starts_paused_at_segment"] = audioSheet.player?.rate == 0 && !audioSheet.isPlaying
+            && abs((audioSheet.player?.currentTime().seconds ?? -1) - start) < 0.05
+            && abs((audioSheet.player?.currentItem?.forwardPlaybackEndTime.seconds ?? -1) - end) < 0.05
+        try await settle()
+        try capture("15-media-audio-source", to: output, sheet: true)
+        audioSheet.togglePlayback() // Explicit test action on the actual presented view's controller; silent fixture.
+        try await wait(until: { audioSheet.atEnd && audioSheet.player?.rate == 0 && !audioSheet.isPlaying }, timeout: 12)
+        checks["native_audio_segment_actually_stops_at_end"] = abs(audioSheet.currentSeconds - end) < 0.05
+        let closedPlayer = audioSheet.player
+        state.sheet = nil
+        try await wait(until: {
+            audioSheet.player == nil && MediaPreviewProbe.controller(for: audio.id) == nil && !hasPresentedSheet
+        }, timeout: 10)
+        checks["native_audio_sheet_close_releases_player"] = closedPlayer != nil && closedPlayer?.rate == 0
+            && closedPlayer?.currentItem == nil
+        try await settle()
+
+        state.sheet = .source(audioSource)
+        let switchingPreview = try await presentedPreview(documentID: audio.id, image: false)
+        let switchingPlayer = switchingPreview.player
+        switchingPreview.togglePlayback()
+        try await wait(until: { (switchingPlayer?.rate ?? 0) > 0 }, timeout: 5)
+        state.selectKnowledgeBase(originalBase.id)
+        try await wait(until: {
+            switchingPreview.player == nil && state.sheet == nil && !hasPresentedSheet
+                && MediaPreviewProbe.controller(for: audio.id) == nil
+        }, timeout: 10)
+        checks["native_switch_library_stops_playback"] = switchingPlayer?.rate == 0
+            && switchingPlayer?.currentItem == nil && state.searchMediaURL == nil && state.searchResults.isEmpty
+        try await settle()
+        state.selectKnowledgeBase(mediaBase.id)
+        state.sheet = .source(audioSource)
+        let deletingPreview = try await presentedPreview(documentID: audio.id, image: false)
+        let deletingPlayer = deletingPreview.player
+        deletingPreview.togglePlayback()
+        try await wait(until: { (deletingPlayer?.rate ?? 0) > 0 }, timeout: 5)
+        state.requestDelete(audio)
+        guard let deletion = state.deletion else { throw AskBaseError.invalidInput("Synthetic source deletion was not prepared.") }
+        state.confirmDelete(deletion)
+        try await wait(until: { !state.isDeleting && deletingPreview.player == nil && state.sheet == nil }, timeout: 10)
+        checks["native_delete_source_stops_playback"] = deletingPlayer?.rate == 0
+            && deletingPlayer?.currentItem == nil && !state.documents.contains(where: { $0.id == audio.id })
+        checks["native_media_queries_did_not_import_duplicates"] = state.documents.count == 1 && state.documents.first?.id == image.id
+    }
+
+    private static var hasPresentedSheet: Bool {
+        NSApp.windows.contains { $0.isVisible && $0.title == "AskBase Local" && $0.attachedSheet != nil }
+    }
+
+    private static func presentedPreview(documentID: String, image: Bool) async throws -> MediaPreviewController {
+        try await wait(until: {
+            guard let preview = MediaPreviewProbe.controller(for: documentID) else { return false }
+            return preview.error != nil || (!preview.isLoading && (image ? preview.image != nil : preview.player != nil))
+        }, timeout: 20)
+        guard let preview = MediaPreviewProbe.controller(for: documentID), preview.error == nil else {
+            throw AskBaseError.storage("The presented media preview failed: \(MediaPreviewProbe.controller(for: documentID)?.error ?? "missing view")")
+        }
+        return preview
     }
 
     private static func finishVerification(state: AppState, succeeded: Bool) async -> Never {

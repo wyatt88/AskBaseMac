@@ -31,6 +31,91 @@ enum DocumentSort: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum SearchInput: Equatable {
+    case text(String)
+    case media(URL)
+
+    var methodLabel: String {
+        switch self {
+        case .text: "文字查询"
+        case .media: "媒体文件查询"
+        }
+    }
+
+    var summary: String {
+        switch self {
+        case .text(let query): query
+        case .media(let url): url.lastPathComponent
+        }
+    }
+}
+
+/// Capability labels describe the last health response, never the file extension
+/// or the fact that the service happens to be reachable.
+struct EmbeddingCapabilities {
+    let status: ModelStatus?
+    var checking = false
+
+    private var modalities: [String] {
+        Array(Set((status?.embeddingModalities ?? [])
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty })).sorted()
+    }
+
+    var reportedLabel: String {
+        guard !checking else { return "正在检测模型模态…" }
+        guard status != nil else { return "模型模态尚未检测" }
+        guard !modalities.isEmpty else { return "服务未报告支持的模态" }
+        let known = ["text", "code", "image", "audio", "video"]
+        let ordered = known.filter { modalities.contains($0) } + modalities.filter { !known.contains($0) }
+        return "模型报告：\(ordered.map(Self.label).joined(separator: "、"))"
+    }
+
+    var mediaUnavailableReason: String? {
+        if checking { return "媒体能力正在检测，请等待连接检查完成。" }
+        guard let status else { return "媒体能力尚未检测；请到设置中测试连接。" }
+        guard status.embeddingAvailable else { return "媒体索引尚未就绪：\(status.embeddingDetail)" }
+        guard !modalities.isEmpty else {
+            return "当前服务未报告模态，尚不能确认媒体能力；请更新本机嵌入服务后测试连接。"
+        }
+        let missing = ["image", "audio", "video"].filter { !modalities.contains($0) }
+        guard !missing.isEmpty else { return nil }
+        return "\(missing.map(Self.label).joined(separator: "、"))尚未就绪：当前嵌入服务未报告这些模态的支持。"
+    }
+
+    private static func label(_ modality: String) -> String {
+        switch modality {
+        case "text": "文本"
+        case "code": "代码"
+        case "image": "图片"
+        case "audio": "音频"
+        case "video": "视频"
+        default: modality
+        }
+    }
+}
+
+enum MediaEvidence {
+    static func isReadable(text: String, media: MediaReference?) -> Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (media == nil || media?.textSource == .ocr)
+    }
+
+    static func summary(for media: MediaReference) -> String {
+        media.kind == .image
+            ? "媒体语义索引；可查看原图。此处没有可读的 OCR 文字。"
+            : "媒体语义索引；可播放原片段。此处没有语音转写。"
+    }
+
+    static func position(for media: MediaReference) -> String {
+        if media.kind == .image, let index = media.imageIndex {
+            guard index >= 0, index < Int.max else { return "帧／页位置无效" }
+            return "第 \(index + 1) 帧／页"
+        }
+        return media.positionLabel
+    }
+}
+
 struct AppIssue: Identifiable {
     let id = UUID()
     var title: String

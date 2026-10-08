@@ -22,7 +22,7 @@ def runtime_complete():
         config = json.loads((RUNTIME / "config.json").read_text())
         if config != json.loads((SOURCE / "config.json").read_text()):
             return False
-        for name in ("encoder.py", "server.py", "scripts/manage.py", "requirements.lock.txt"):
+        for name in ("encoder.py", "media_encoder.py", "server.py", "scripts/manage.py", "requirements.lock.txt"):
             if (RUNTIME / name).read_bytes() != (SOURCE / name).read_bytes():
                 return False
         manifest = json.loads((RUNTIME / "evidence/model-download.json").read_text())
@@ -71,9 +71,22 @@ def setup():
         if (health.get("model") == "embeddinggemma-2" and health.get("encoder_signature")
                 and health.get("status") == "ok" and health.get("dimensions") == 768
                 and health.get("revision") == REVISION):
-            print("EmbeddingGemma 2 is already ready at http://127.0.0.1:8871. Reusing it.")
-            return
-        raise SystemExit("Port 8871 has an incompatible service. It was not changed.")
+            if set(health.get("modalities") or []) >= {"text", "image", "audio", "video"} and health.get("media_encoder_signature"):
+                print("Multimodal EmbeddingGemma 2 is ready at http://127.0.0.1:8871. Reusing it.")
+                return
+            # Updating an earlier text-only installation is authorized by running
+            # setup. The manager verifies the on-disk AND loaded LaunchAgent;
+            # an unrelated service on this port must never be terminated.
+            try:
+                previous = json.loads((RUNTIME / "config.json").read_text())
+            except (OSError, ValueError):
+                raise SystemExit("A text-only service is running but is not a verified AskBase runtime. It was not changed.")
+            if previous.get("revision") != REVISION or previous.get("repository") != "google/embeddinggemma-2":
+                raise SystemExit("A different runtime is installed; it was not changed.")
+            subprocess.run([sys.executable, str(SOURCE / "scripts/manage.py"), "stop"], check=True)
+            print("Upgrading the verified text-only AskBase service to support images, audio and video.")
+        else:
+            raise SystemExit("Port 8871 has an incompatible service. It was not changed.")
     except (OSError, ValueError):
         pass
     with socket.socket() as listener:

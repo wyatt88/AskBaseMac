@@ -39,6 +39,7 @@ func recoverInterruptedImports() throws  // indexing -> failed with retry explan
 ```
 static func expand(_ urls: [URL]) throws -> [URL]   // no quotas or extension filter; skip hidden descendants/packages/symlinks
 static func prepare(url: URL, knowledgeBaseID: String, originalsRoot: URL) throws -> PreparedDocument
+static func prepareForImport(url: URL, knowledgeBaseID: String, originalsRoot: URL) async throws -> PreparedDocument
 static func parse(url: URL, originalFilename: String? = nil) throws -> [ParsedPage]
 ```
 
@@ -56,9 +57,10 @@ directory depth, or extension quotas. Explicitly selected hidden files are accep
 folder imports skip hidden descendants, file packages, and symlinks.
 Use a private disk snapshot, incremental SHA256, and streamed managed-original copy so
 the parser, digest, and stored original refer to exactly the same bytes. Reject changed
-inputs, pipes, devices, unreadable content, and formats without usable text explicitly.
+inputs, pipes, devices, unreadable content, and undecodable formats explicitly.
 Text chunking uses grapheme-safe String indices without a whole-document Character array.
-Reject scanned PDFs with a clear OCR message; no OCR promise.
+Reject scanned PDFs with a clear OCR message. Media OCR is independent and does not
+imply automatic scanned-PDF OCR.
 SHA256 whole file duplicate identity within KB. Store copies under UUID filenames,
 with an optional original extension. Reindex passes the original filename as a type hint.
 Cancellation must propagate instead of producing partial ready documents.
@@ -66,6 +68,25 @@ SQLite transactionally replaces chunks and marks ready only on nonempty finite, 
 matching-signature embeddings. JSON encode records acceptable; keys/FKs ensure deletion.
 Tests: chunk bounds and multilingual coverage/overlap, duplicate identity, atomic failed
 replacement, cascade isolation, crash recovery, source invalidation, note persistence.
+
+### Native media extension (0.3.0)
+
+`MediaProcessor.inspect(url:) async throws -> MediaPlan?` identifies from contents and
+enumerates every image frame/page or contiguous audio/video segment.
+`MediaProcessor.segment(url:reference:) async throws -> PreparedMediaSegment` prepares
+one <=10-second segment, <=8 video frames, and PCM16 mono 16 kHz audio if present.
+Its `text` is actual local Vision OCR only, with explicit `.ocr` provenance; metadata
+and placeholders are never transcripts. The original file is retained locally.
+
+`EmbeddingProviding.embedMedia(_:inputType:)` sends base64 bytes to
+`POST /v1/media/embeddings` only after `/health` advertises that modality and a media
+signature. Response validation requires both unchanged shared text signature and media
+signature, one finite normalized 768d vector, correct role/model/index/dimensions.
+
+Media metadata is optional in existing Codable records. New media chunks must have
+consistent recipe/signature, a valid frame index or source interval, and full continuous
+coverage. Native media labels cannot enter text RAG. Persisted source validation includes
+media positions and provenance, so reindex/deletion cannot preserve misleading citations.
 
 ## Engine API (main agent)
 
@@ -84,6 +105,7 @@ func deleteKnowledgeBase(id: String) throws
 func importDocuments(urls: [URL], knowledgeBaseID: String) async throws -> ImportReport
 func reindex(documentID: String) async throws
 func search(query: String, knowledgeBaseID: String) async throws -> [SearchResult]
+func search(mediaURL: URL, knowledgeBaseID: String) async throws -> [SearchResult]
 func deleteDocument(id: String) throws
 func updateDocument(_ document: LibraryDocument) throws // favorite/tags/title only
 func originalURL(documentID: String) throws -> URL
@@ -122,5 +144,5 @@ Keep UI responsive during indexing. Include startup error screen if DB fails.
 ## Local verification
 
 Offline core tests use temporary directories and deterministic fixtures. Main provides
-CLI import/search/ask/smoke for live integration into isolated temporary library. Core
+CLI import/search/search-media/ask/smoke/media-smoke for live integration into isolated temporary library. Core
 tests must not contact live models or operate on user's real library.

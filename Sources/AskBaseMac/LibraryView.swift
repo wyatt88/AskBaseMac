@@ -30,10 +30,13 @@ struct LibraryView: View {
                 .disabled(!state.canImport)
                 .help("选择文件或文件夹，也可以直接拖入窗口（⌘I）")
             }
+            EmbeddingCapabilityNote(capabilities: state.embeddingCapabilities)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 28).padding(.bottom, 15)
             if state.documents.isEmpty {
                 Divider()
                 EmptyState(symbol: "tray.and.arrow.down", title: "从第一份资料开始",
-                           detail: "选择文档、文本或源代码，也可以拖入文件夹。不限大小、数量或扩展名，提取文字后即可检索和提问。") {
+                           detail: "选择文本、图片、音频、视频或文件夹。不设大小、数量或总时长配额，按内容识别并检查模型能力。文字和 OCR 可用于问答；其他媒体可搜索并回到原件核对。") {
                     VStack(spacing: 11) {
                         Button("选择文件或文件夹…") { state.chooseImport() }
                             .buttonStyle(.borderedProminent).disabled(!state.canImport)
@@ -49,9 +52,10 @@ struct LibraryView: View {
                     Group {
                         if let id = state.selectedDocumentID {
                             DocumentDetailView(documentID: id)
+                                .id(id)
                         } else {
                             EmptyState(symbol: "doc.text.magnifyingglass", title: "选择一份资料",
-                                       detail: "在此查看内容、整理标签，或打开保存在本机的原始文件。") {
+                                       detail: "在此查看文字和图片、播放音视频片段、整理标签，或打开保存在本机的原始文件。") {
                                 EmptyView()
                             }
                         }
@@ -179,6 +183,14 @@ struct DocumentRow: View {
                     Text("·")
                     Text(document.formattedSize)
                 }.font(.caption).foregroundStyle(.secondary)
+                if let media = document.media {
+                    if MediaEvidence.position(for: media) != media.kind.label {
+                        Text(MediaEvidence.position(for: media)).font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let label = media.textSource?.label {
+                        Label(label, systemImage: "text.viewfinder").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 HStack(spacing: 5) {
                     DocumentStatusLabel(status: document.status,
                                         reindexing: state.reindexActivity?.currentDocumentID == document.id,

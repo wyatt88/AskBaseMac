@@ -16,6 +16,17 @@
   "max_pending_requests": 4,
   "query_prefix": "task: search result | query: ",
   "document_prefix": "title: none | text: ",
-  "modalities_enabled": ["text"],
-  "inference_microbatch_size": 1
+  "modalities_enabled": ["text", "image", "audio", "video"],
+  "inference_microbatch_size": 1,
+  "media_limits": {
+    "max_request_bytes": 50331648,
+    "max_image_bytes": 4194304,
+    "max_audio_bytes": 524288,
+    "max_image_edge": 8192,
+    "max_image_pixels": 16777216,
+    "max_total_frame_pixels": 33554432,
+    "max_video_frames": 8,
+    "max_duration_seconds": 10,
+    "max_tokens": 8192
+  }
 }

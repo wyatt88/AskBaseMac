@@ -15,10 +15,20 @@ struct SearchView: View {
                 )
             }
             searchField.padding(.horizontal, 28).padding(.bottom, 15)
-            HStack {
-                Text("只检索当前知识库 · 最多返回 \(state.settings.topK) 个片段")
-                Spacer()
-                Text("无需回答模型")
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("只检索当前知识库 · 最多返回 \(state.settings.topK) 个片段")
+                    Spacer()
+                    Text("无需回答模型")
+                }
+                if let input = state.searchedInput, state.hasSearched || state.isSearching {
+                    Text("本次\(input.methodLabel)：\(input.summary)")
+                        .lineLimit(2).help(input.summary).textSelection(.enabled)
+                }
+                if let notice = state.searchNotice {
+                    Text(notice).accessibilityIdentifier("searchNotice")
+                }
+                EmbeddingCapabilityNote(capabilities: state.embeddingCapabilities)
             }
             .font(.caption).foregroundStyle(.secondary)
             .padding(.horizontal, 30).padding(.bottom, 20)
@@ -29,43 +39,83 @@ struct SearchView: View {
     }
 
     private var searchField: some View {
-        HStack(spacing: 13) {
-            Image(systemName: "magnifyingglass").font(.title3).foregroundStyle(AppPalette.accent)
-            TextField("输入问题、概念或一段描述", text: $state.searchQuery)
-                .textFieldStyle(.plain).font(.system(size: 15))
-                .focused($queryFocused)
-                .onSubmit { if !state.isSearching { state.runSearch() } }
-                .accessibilityIdentifier("semanticSearchQuery")
-            if state.isSearching {
-                Button("取消") { state.cancelSearch() }.controlSize(.regular)
-            } else {
-                Button("搜索") { state.runSearch() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(state.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                              || state.readyDocumentCount == 0)
-                    .accessibilityIdentifier("semanticSearchSubmit")
+        VStack(alignment: .leading, spacing: 11) {
+            HStack(spacing: 12) {
+                Text(state.searchMediaURL == nil ? "查询方式：文字" : "查询方式：媒体文件")
+                    .font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                if state.searchMediaURL != nil {
+                    Button("改用文字搜索") {
+                        state.useTextSearch()
+                        queryFocused = true
+                    }
+                    .controlSize(.small)
+                    .disabled(state.isSearching || state.isChoosingSearchMedia)
+                }
+                Spacer(minLength: 0)
+                Button {
+                    queryFocused = false
+                    state.chooseMediaSearch()
+                } label: {
+                    Label(state.isChoosingSearchMedia ? "正在选择…" : "用媒体搜索…", systemImage: "photo.on.rectangle")
+                }
+                .controlSize(.small)
+                .disabled(!state.canChooseSearchMedia)
+                .help("选择本机图片、音频或视频，按文件内容检索")
+                .accessibilityIdentifier("chooseMediaSearch")
+            }
+            HStack(spacing: 13) {
+                Image(systemName: state.searchMediaURL == nil ? "magnifyingglass" : "paperclip")
+                    .font(.title3).foregroundStyle(AppPalette.accent)
+                if let url = state.searchMediaURL {
+                    Text(url.lastPathComponent).font(.system(size: 15))
+                        .lineLimit(2).help(url.lastPathComponent).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("mediaSearchFileName")
+                } else {
+                    TextField("输入问题、概念或一段描述", text: $state.searchQuery)
+                        .textFieldStyle(.plain).font(.system(size: 15))
+                        .focused($queryFocused)
+                        .onSubmit { state.runSearch() }
+                        .accessibilityIdentifier("semanticSearchQuery")
+                }
+                if state.isSearching {
+                    Button(state.isCancellingSearch ? "正在停止…" : "取消") { state.cancelSearch() }
+                        .controlSize(.regular).disabled(state.isCancellingSearch)
+                } else {
+                    Button(state.searchMediaURL == nil ? "搜索" : "按媒体内容搜索") { state.runSearch() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!state.canSearch)
+                        .accessibilityIdentifier("semanticSearchSubmit")
+                }
+            }
+            .padding(13)
+            .background(AppPalette.surface, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(
+                queryFocused ? AppPalette.accent.opacity(0.5) : AppPalette.line, lineWidth: 1
+            ))
+            if state.searchMediaURL != nil {
+                Text("按媒体内容处理全部片段。此查询文件不会导入资料库。")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
-        .padding(13)
-        .background(AppPalette.surface, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(
-            queryFocused ? AppPalette.accent.opacity(0.5) : AppPalette.line, lineWidth: 1
-        ))
     }
 
     @ViewBuilder private var results: some View {
         if state.isSearching {
             VStack(spacing: 17) {
                 ProgressView()
-                Text("正在检索资料…").foregroundStyle(.secondary)
+                Text(state.isCancellingSearch ? "正在停止搜索…"
+                     : state.searchMediaURL == nil ? "正在检索资料…" : "正在读取媒体并检索全部片段…")
+                    .foregroundStyle(.secondary)
                 Button("取消搜索") { state.cancelSearch() }.buttonStyle(.borderless)
+                    .disabled(state.isCancellingSearch)
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let error = state.searchError {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     ErrorPanel(title: "搜索未完成", message: error)
                     HStack {
-                        Button("重试搜索") { state.runSearch() }.buttonStyle(.borderedProminent)
+                        Button("重试搜索") { state.runSearch() }.buttonStyle(.borderedProminent).disabled(!state.canSearch)
                         Button("前往资料库重新索引") { state.section = .library }
                         Button("模型设置") { state.section = .settings }
                     }
@@ -83,7 +133,7 @@ struct SearchView: View {
                         HStack(alignment: .firstTextBaseline) {
                             Text("\(state.searchResults.count) 个相关片段").font(.callout.weight(.medium))
                             Spacer()
-                            Text("点击来源核对原文").font(.caption).foregroundStyle(.secondary)
+                            Text("点击来源查看原文或播放媒体").font(.caption).foregroundStyle(.secondary)
                         }.padding(.bottom, 4)
                         ForEach(Array(state.searchResults.enumerated()), id: \.element.id) { index, source in
                             SourceCard(source: source, number: index + 1) {
@@ -100,7 +150,7 @@ struct SearchView: View {
             }
         } else if state.documents.isEmpty {
             EmptyState(symbol: "doc.text.magnifyingglass", title: "先添加要查找的资料",
-                       detail: "把你选择的文件导入当前知识库，完成索引后，就能按内容含义搜索。") {
+                       detail: "导入文本、图片、音频或视频。完成索引后，可用文字描述或本机媒体文件搜索；媒体能力以当前模型报告为准。") {
                 Button("导入资料…") { state.chooseImport() }
                     .buttonStyle(.borderedProminent).disabled(!state.canImport)
             }
@@ -110,8 +160,9 @@ struct SearchView: View {
                 Button("查看资料状态") { state.section = .library }
             }
         } else {
-            EmptyState(symbol: "sparkle.magnifyingglass", title: "用一句话，找到相关资料",
-                       detail: "描述你想了解的内容。搜索结果会保留文档名称、原文片段，以及 PDF 中的页码。") {
+            EmptyState(symbol: "sparkle.magnifyingglass",
+                       title: state.searchMediaURL == nil ? "用文字或媒体，找到相关资料" : "媒体查询文件已保留",
+                       detail: "输入描述，或选择图片、音频、视频作为查询。结果保留原文、OCR 文字、页码或媒体时间；点击来源查看原图或播放片段。") {
                 EmptyView()
             }
         }

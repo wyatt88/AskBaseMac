@@ -52,6 +52,7 @@ public actor KnowledgeEngine {
             switch await embeddingResult {
             case .success(let health):
                 result.embeddingAvailable = true
+                result.embeddingModalities = health.modalities ?? ["text"]
                 result.embeddingDetail = "EmbeddingGemma 2 · \(health.dimensions) 维 · 本机已连接"
             case .failure(let error): result.embeddingDetail = error.localizedDescription
             }
@@ -97,15 +98,16 @@ public actor KnowledgeEngine {
         let client = embedder(configuration)
         _ = try await client.health()
         let urls = try DocumentImporter.expand(urls)
-        guard !urls.isEmpty else { throw AskBaseError.importFailed("所选位置没有可导入的普通文件。请选择包含文字的文档或文件夹。") }
+        guard !urls.isEmpty else { throw AskBaseError.importFailed("所选位置没有可导入的普通文件。请选择文档、媒体或文件夹。") }
         var report = ImportReport()
         for url in urls {
             try Task.checkCancellation()
             try requireBase(knowledgeBaseID)
             var pending: LibraryDocument?
             do {
-                let prepared = try DocumentImporter.prepare(url: url, knowledgeBaseID: knowledgeBaseID,
-                                                            originalsRoot: root.appendingPathComponent("Originals"))
+                let prepared = try await DocumentImporter.prepareForImport(
+                    url: url, knowledgeBaseID: knowledgeBaseID, originalsRoot: root.appendingPathComponent("Originals")
+                )
                 do {
                     if let duplicate = try store.duplicate(contentHash: prepared.document.contentHash,
                                                            knowledgeBaseID: knowledgeBaseID) {
@@ -130,7 +132,16 @@ public actor KnowledgeEngine {
                     throw metadataError
                 }
                 pending = prepared.document
-                let chunks = try await embedded(prepared.chunks, using: client)
+                let chunks: [DocumentChunk]
+                if prepared.document.media != nil {
+                    chunks = try await DocumentImporter.withSnapshot(
+                        url: originalURL(documentID: prepared.document.id), expectedHash: prepared.document.contentHash
+                    ) { snapshot in
+                        try await self.embeddedMedia(prepared.chunks, url: snapshot, using: client)
+                    }
+                } else {
+                    chunks = try await embedded(prepared.chunks, using: client)
+                }
                 try Task.checkCancellation()
                 guard try store.document(id: prepared.document.id) != nil else {
                     throw AskBaseError.importFailed("资料已被删除，已取消索引写入。")
@@ -158,6 +169,9 @@ public actor KnowledgeEngine {
         for start in stride(from: 0, to: chunks.count, by: 8) {
             try Task.checkCancellation()
             let batch = Array(chunks[start..<min(start + 8, chunks.count)])
+            guard try store.document(id: batch[0].documentID) != nil else {
+                throw AskBaseError.importFailed("资料已被删除，已停止后续索引。")
+            }
             let response = try await client.embed(batch.map(\.text), inputType: "document")
             guard response.vectors.count == batch.count else { throw AskBaseError.modelUnavailable("向量数量不完整。") }
             if let signature, signature != response.signature {
@@ -173,6 +187,52 @@ public actor KnowledgeEngine {
         return output
     }
 
+    private func embeddedMedia(
+        _ chunks: [DocumentChunk], url: URL, using client: any EmbeddingProviding
+    ) async throws -> [DocumentChunk] {
+        guard let kind = chunks.first?.media?.kind, !chunks.isEmpty else {
+            throw AskBaseError.importFailed("没有可索引的媒体片段。")
+        }
+        let health = try await client.health()
+        guard health.supports(kind) else {
+            throw AskBaseError.modelUnavailable("本机服务尚未启用\(kind.label)。请更新 EmbeddingGemma 2 服务后重新索引。")
+        }
+        var output: [DocumentChunk] = []
+        for var chunk in chunks {
+            try Task.checkCancellation()
+            guard try store.document(id: chunk.documentID) != nil else {
+                throw AskBaseError.importFailed("资料已被删除，已停止后续媒体处理。")
+            }
+            guard let reference = chunk.media, reference.kind == kind else {
+                throw AskBaseError.importFailed("媒体片段类型不一致。")
+            }
+            let prepared = try await MediaProcessor.segment(url: url, reference: reference)
+            try Task.checkCancellation()
+            guard try store.document(id: chunk.documentID) != nil else {
+                throw AskBaseError.importFailed("资料已被删除，已停止媒体编码。")
+            }
+            let response = try await client.embedMedia(prepared.input, inputType: "document")
+            guard response.signature == health.encoderSignature,
+                  response.mediaSignature == health.mediaEncoderSignature,
+                  response.vectors.count == 1, let vector = response.vectors.first, validEmbedding(vector) else {
+                throw AskBaseError.incompatibleIndex("媒体编码版本在索引期间发生变化或返回了无效向量，原索引已保留。")
+            }
+            var position = prepared.reference
+            position.encoderSignature = response.mediaSignature
+            if let text = prepared.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty,
+               position.textSource != nil {
+                chunk.text = text
+            } else {
+                position.textSource = nil
+                chunk.text = DocumentImporter.mediaPlaceholder(position)
+            }
+            chunk.media = position
+            chunk.embedding = vector; chunk.encoderSignature = response.signature; chunk.dimensions = 768
+            output.append(chunk)
+        }
+        return output
+    }
+
     public func reindex(documentID: String) async throws {
         guard !reindexingDocuments.contains(documentID) else { throw AskBaseError.invalidInput("此资料正在重新索引。") }
         guard let document = try store.document(id: documentID) else { throw AskBaseError.invalidInput("资料已不存在。") }
@@ -180,11 +240,24 @@ public actor KnowledgeEngine {
         reindexingDocuments.insert(documentID)
         defer { reindexingDocuments.remove(documentID) }
         do {
-            let pages = try DocumentImporter.parse(url: originalURL(documentID: documentID),
-                                                  originalFilename: document.fileName)
-            let chunks = try TextChunker.cancellableChunks(pages: pages, documentID: documentID,
-                                                          knowledgeBaseID: document.knowledgeBaseID)
-            let encoded = try await embedded(chunks, using: embedder(store.settings()))
+            let client = embedder(try store.settings())
+            let encoded = try await DocumentImporter.withSnapshot(
+                url: originalURL(documentID: documentID), expectedHash: document.contentHash
+            ) { snapshot in
+                if let media = document.media {
+                    guard let plan = try await MediaProcessor.inspect(url: snapshot), plan.reference.kind == media.kind else {
+                        throw AskBaseError.importFailed("媒体副本无法识别，旧索引已保留。")
+                    }
+                    let chunks = try DocumentImporter.mediaChunks(
+                        plan: plan, documentID: documentID, knowledgeBaseID: document.knowledgeBaseID
+                    )
+                    return try await self.embeddedMedia(chunks, url: snapshot, using: client)
+                }
+                let pages = try DocumentTextExtractor.parse(url: snapshot, originalFilename: document.fileName)
+                let chunks = try TextChunker.cancellableChunks(pages: pages, documentID: documentID,
+                                                              knowledgeBaseID: document.knowledgeBaseID)
+                return try await self.embedded(chunks, using: client)
+            }
             try Task.checkCancellation()
             try store.replaceChunks(documentID: documentID, chunks: encoded)
         } catch {
@@ -197,23 +270,94 @@ public actor KnowledgeEngine {
     }
 
     public func search(query: String, knowledgeBaseID: String) async throws -> [SearchResult] {
+        try await searchText(query: query, knowledgeBaseID: knowledgeBaseID, readableOnly: false)
+    }
+
+    private func searchText(query: String, knowledgeBaseID: String, readableOnly: Bool) async throws -> [SearchResult] {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty, query.count <= 4000 else { throw AskBaseError.invalidInput("请输入 1–4000 字的问题或关键词。") }
         try requireBase(knowledgeBaseID)
         let configuration = try store.settings()
         let client = embedder(configuration)
         let embedded = try await client.embed([query], inputType: "query")
+        let health: EmbeddingHealth?
+        if try store.chunks(knowledgeBaseID: knowledgeBaseID).contains(where: { $0.media != nil }) {
+            health = try await client.health()
+        } else { health = nil }
+        try Task.checkCancellation()
+        try requireBase(knowledgeBaseID)
         // Read after the await so concurrent removal cannot yield deleted sources.
-        let chunks = try store.chunks(knowledgeBaseID: knowledgeBaseID)
-        guard !chunks.isEmpty else { return [] }
-        guard chunks.allSatisfy({ $0.dimensions == 768 && $0.encoderSignature == embedded.signature }) else {
-            throw AskBaseError.incompatibleIndex("部分资料的向量来自另一编码版本。请在资料库重新索引后搜索；不同版本的向量不能混用。")
+        let chunks = try store.chunks(knowledgeBaseID: knowledgeBaseID).filter {
+            !readableOnly || $0.media == nil || $0.media?.textSource != nil
         }
-        guard let vector = embedded.vectors.first, validEmbedding(vector) else {
+        guard !chunks.isEmpty else { return [] }
+        try validateSpace(chunks: chunks, signature: embedded.signature, health: health)
+        guard embedded.vectors.count == 1, let vector = embedded.vectors.first, validEmbedding(vector) else {
             throw AskBaseError.modelUnavailable("查询向量无效。")
         }
         let documents = try store.snapshot().documents.filter { $0.knowledgeBaseID == knowledgeBaseID }
         return Retrieval.rank(query: query, vector: vector, chunks: chunks, documents: documents, limit: configuration.topK)
+    }
+
+    /// A media query is transient: it is never copied into the user's library.
+    /// Long queries cover every segment; each source keeps its best similarity.
+    public func search(mediaURL: URL, knowledgeBaseID: String) async throws -> [SearchResult] {
+        try requireBase(knowledgeBaseID)
+        let configuration = try store.settings()
+        let client = embedder(configuration)
+        let health = try await client.health()
+        let vectors = try await DocumentImporter.withSnapshot(url: mediaURL) { snapshot in
+            guard let plan = try await MediaProcessor.inspect(url: snapshot) else {
+                throw AskBaseError.invalidInput("用媒体搜索需要图片、音频或视频文件。")
+            }
+            guard health.supports(plan.reference.kind) else {
+                throw AskBaseError.modelUnavailable("本机服务尚未启用\(plan.reference.kind.label)，请先更新嵌入服务。")
+            }
+            var vectors: [[Float]] = []
+            for reference in plan.segments {
+                try Task.checkCancellation()
+                let prepared = try await MediaProcessor.segment(url: snapshot, reference: reference)
+                let response = try await client.embedMedia(prepared.input, inputType: "query")
+                guard response.signature == health.encoderSignature,
+                      response.mediaSignature == health.mediaEncoderSignature,
+                      response.vectors.count == 1, let vector = response.vectors.first, validEmbedding(vector) else {
+                    throw AskBaseError.incompatibleIndex("媒体查询期间编码服务发生变化或返回无效向量，请重试。")
+                }
+                vectors.append(vector)
+            }
+            return vectors
+        }
+        try Task.checkCancellation()
+        try requireBase(knowledgeBaseID)
+        let chunks = try store.chunks(knowledgeBaseID: knowledgeBaseID)
+        try validateSpace(chunks: chunks, signature: health.encoderSignature, health: health)
+        let documents = try store.snapshot().documents.filter { $0.knowledgeBaseID == knowledgeBaseID }
+        var best: [String: SearchResult] = [:]
+        for vector in vectors {
+            try Task.checkCancellation()
+            for result in Retrieval.rank(query: "", vector: vector, chunks: chunks,
+                                          documents: documents, limit: configuration.topK) {
+                if result.score > (best[result.id]?.score ?? -Double.infinity) { best[result.id] = result }
+            }
+        }
+        return Array(best.values.sorted {
+            $0.score == $1.score ? $0.id < $1.id : $0.score > $1.score
+        }.prefix(configuration.topK))
+    }
+
+    private func validateSpace(chunks: [DocumentChunk], signature: String, health: EmbeddingHealth?) throws {
+        guard chunks.allSatisfy({ $0.dimensions == 768 && $0.encoderSignature == signature }) else {
+            throw AskBaseError.incompatibleIndex("部分资料的向量来自另一编码版本。请在资料库重新索引后搜索；不同版本的向量不能混用。")
+        }
+        for chunk in chunks {
+            if let media = chunk.media {
+                guard let health, health.encoderSignature == signature, health.supports(media.kind),
+                      media.encoderSignature == health.mediaEncoderSignature,
+                      media.recipe == MediaProcessor.recipe else {
+                    throw AskBaseError.incompatibleIndex("部分媒体使用了不同的编码版本，或本机媒体服务尚未就绪。请更新服务并重新索引这些媒体。")
+                }
+            }
+        }
     }
     public func deleteDocument(id: String) throws { try store.deleteDocument(id: id) }
     public func updateDocument(_ document: LibraryDocument) throws {
@@ -264,9 +408,11 @@ public actor KnowledgeEngine {
             throw AskBaseError.modelUnavailable("请先在设置中选择本地回答模型。语义搜索可以独立使用。")
         }
         let history = try store.messages(conversationID: conversationID)
-        let sources = try await search(query: question, knowledgeBaseID: knowledgeBaseID)
+        // Filter before top-K so opaque media hits cannot crowd readable text
+        // out of the RAG context or become fabricated transcript evidence.
+        let sources = try await searchText(query: question, knowledgeBaseID: knowledgeBaseID, readableOnly: true)
         guard !sources.isEmpty else {
-            throw AskBaseError.invalidInput("知识库中还没有可检索的资料，请先导入并完成索引。")
+            throw AskBaseError.invalidInput("没有可用于文字问答的原文或 OCR 文字。图片、录音和视频仍可在语义搜索中检索、预览或播放。")
         }
         let content = try await chat(configuration).answer(model: configuration.chatModel,
                                                            question: question, sources: sources, history: history)

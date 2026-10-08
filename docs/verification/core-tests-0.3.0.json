@@ -1,0 +1,52 @@
+{
+  "date": "2026-10-09",
+  "suite": "Swift XCTest",
+  "passed": 131,
+  "total": 131,
+  "failures": 0,
+  "suites": [
+    {
+      "suite": "DocumentFormatTests",
+      "passed": 21
+    },
+    {
+      "suite": "EngineTests",
+      "passed": 8
+    },
+    {
+      "suite": "ImportRegressionTests",
+      "passed": 13
+    },
+    {
+      "suite": "ImporterTests",
+      "passed": 19
+    },
+    {
+      "suite": "IndependentMediaLifecycleTests",
+      "passed": 7
+    },
+    {
+      "suite": "MediaClientTests",
+      "passed": 5
+    },
+    {
+      "suite": "MediaProcessorTests",
+      "passed": 21
+    },
+    {
+      "suite": "ModelClientTests",
+      "passed": 9
+    },
+    {
+      "suite": "MultimodalCoreTests",
+      "passed": 7
+    },
+    {
+      "suite": "StorageTests",
+      "passed": 21
+    }
+  ],
+  "command": "swift test",
+  "scope": "Temporary synthetic inputs and offline model doubles. No private user library or real embedding calls.",
+  "log_sha256": "f04150be4ac5883a9befd0524fa18bb28335dddeb2ee8195de4d5f8c5cc8fe79"
+}

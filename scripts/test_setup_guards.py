@@ -1,5 +1,6 @@
 """Offline regression tests: never call launchctl, install packages, or load a model."""
 import importlib.util
+import io
 import json
 from pathlib import Path
 import subprocess
@@ -159,6 +160,56 @@ environment = { SECRET_SENTINEL_DO_NOT_PRINT }
         for command in calls[:2]:
             self.assertEqual(command[command.index("--arch") + 1], "arm64")
         self.assertEqual(calls[-1][0:2], ["lipo", "-archs"])
+
+    def test_healthy_text_only_service_is_upgraded_instead_of_reported_as_multimodal(self):
+        module = load("setup_embedding")
+        with tempfile.TemporaryDirectory() as directory:
+            module.RUNTIME = Path(directory) / "runtime"
+            module.RUNTIME.mkdir()
+            (module.RUNTIME / "config.json").write_text(json.dumps({
+                "revision": module.REVISION, "repository": "google/embeddinggemma-2",
+            }))
+            module.SOURCE = Path(directory) / "source"
+            module.SOURCE.mkdir()
+            response = io.BytesIO(json.dumps({
+                "model": "embeddinggemma-2", "revision": module.REVISION,
+                "status": "ok", "dimensions": 768, "encoder_signature": "legacy", "modalities": ["text"],
+            }).encode())
+            opener = Mock()
+            opener.open.return_value = response
+            socket = Mock()
+            socket.__enter__ = Mock(return_value=socket); socket.__exit__ = Mock(return_value=None)
+            socket.connect_ex.return_value = 1
+            commands = []
+            with patch.object(module.platform, "system", return_value="Darwin"), \
+                 patch.object(module.platform, "machine", return_value="arm64"), \
+                 patch.object(module.urllib.request, "build_opener", return_value=opener), \
+                 patch.object(module.socket, "socket", return_value=socket), \
+                 patch.object(module.shutil, "which", return_value="/fixture/uv"), \
+                 patch.object(module, "runtime_complete", return_value=False), \
+                 patch.object(module.subprocess, "run", side_effect=lambda command, **kw: commands.append(command)):
+                module.setup()
+            self.assertEqual(commands[0][-1], "stop")
+            self.assertIn(str(module.SOURCE / "scripts/manage.py"), commands[0])
+            self.assertTrue(any(str(module.SOURCE / "scripts/install_runtime.py") in command for command in commands))
+            self.assertEqual(commands[-1][-1], "start")
+
+    def test_text_only_listener_without_owned_runtime_is_not_stopped(self):
+        module = load("setup_embedding")
+        with tempfile.TemporaryDirectory() as directory:
+            module.RUNTIME = Path(directory)
+            opener = Mock()
+            opener.open.return_value = io.BytesIO(json.dumps({
+                "model": "embeddinggemma-2", "revision": module.REVISION,
+                "status": "ok", "dimensions": 768, "encoder_signature": "legacy", "modalities": ["text"],
+            }).encode())
+            with patch.object(module.platform, "system", return_value="Darwin"), \
+                 patch.object(module.platform, "machine", return_value="arm64"), \
+                 patch.object(module.urllib.request, "build_opener", return_value=opener), \
+                 patch.object(module.subprocess, "run") as run:
+                with self.assertRaises(SystemExit):
+                    module.setup()
+                run.assert_not_called()
 
 
 if __name__ == "__main__":

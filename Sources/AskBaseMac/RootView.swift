@@ -86,7 +86,7 @@ struct RootView: View {
                                 Image(systemName: "tray.and.arrow.down").font(.system(size: 38, weight: .light))
                                 Text("松开以导入到「\(state.selectedKnowledgeBase?.name ?? "")」")
                                     .font(.title3.weight(.medium))
-                                Text("支持文件和文件夹").font(.callout).foregroundStyle(.secondary)
+                                Text("文本、图片、音频、视频或文件夹").font(.callout).foregroundStyle(.secondary)
                             }.foregroundStyle(AppPalette.accent)
                         }
                         .padding(16)

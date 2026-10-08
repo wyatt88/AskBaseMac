@@ -22,7 +22,10 @@ def main():
     # Runtime files are real files under Application Support: no symlinks back
     # into Documents, and no copying unrelated workspaces or private documents.
     copied = []
-    for name in ("server.py", "encoder.py", "config.json", "requirements.lock.txt", "scripts/manage.py"):
+    for name in (
+        "server.py", "encoder.py", "media_encoder.py", "config.json",
+        "requirements.lock.txt", "scripts/manage.py",
+    ):
         target = RUNTIME / name
         shutil.copy2(SOURCE / name, target)
         copied.append({"path": name, "sha256": hashlib.sha256(target.read_bytes()).hexdigest()})

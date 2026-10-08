@@ -31,16 +31,19 @@ public struct LibraryDocument: Identifiable, Codable, Equatable, Sendable {
     public var updatedAt: Date
     public var isFavorite: Bool
     public var tags: [String]
+    public var media: MediaReference?
     public init(id: String = UUID().uuidString, knowledgeBaseID: String, title: String,
                 fileName: String, relativePath: String, contentHash: String,
                 status: DocumentStatus = .indexing, errorMessage: String? = nil,
                 chunkCount: Int = 0, byteCount: Int = 0, createdAt: Date = Date(),
-                updatedAt: Date = Date(), isFavorite: Bool = false, tags: [String] = []) {
+                updatedAt: Date = Date(), isFavorite: Bool = false, tags: [String] = [],
+                media: MediaReference? = nil) {
         self.id = id; self.knowledgeBaseID = knowledgeBaseID; self.title = title
         self.fileName = fileName; self.relativePath = relativePath; self.contentHash = contentHash
         self.status = status; self.errorMessage = errorMessage; self.chunkCount = chunkCount
         self.byteCount = byteCount; self.createdAt = createdAt; self.updatedAt = updatedAt
         self.isFavorite = isFavorite; self.tags = tags
+        self.media = media
     }
 }
 
@@ -54,12 +57,14 @@ public struct DocumentChunk: Identifiable, Codable, Equatable, Sendable {
     public var embedding: [Float]
     public var encoderSignature: String
     public var dimensions: Int
+    public var media: MediaReference?
     public init(id: String = UUID().uuidString, documentID: String, knowledgeBaseID: String,
                 ordinal: Int, page: Int? = nil, text: String, embedding: [Float] = [],
-                encoderSignature: String = "", dimensions: Int = 768) {
+                encoderSignature: String = "", dimensions: Int = 768, media: MediaReference? = nil) {
         self.id = id; self.documentID = documentID; self.knowledgeBaseID = knowledgeBaseID
         self.ordinal = ordinal; self.page = page; self.text = text; self.embedding = embedding
         self.encoderSignature = encoderSignature; self.dimensions = dimensions
+        self.media = media
     }
 }
 
@@ -71,12 +76,18 @@ public struct SearchResult: Identifiable, Codable, Equatable, Sendable {
     public var text: String
     public var page: Int?
     public var score: Double
+    public var media: MediaReference?
     public init(id: String, documentID: String, knowledgeBaseID: String, title: String,
-                text: String, page: Int? = nil, score: Double) {
+                text: String, page: Int? = nil, score: Double, media: MediaReference? = nil) {
         self.id = id; self.documentID = documentID; self.knowledgeBaseID = knowledgeBaseID
         self.title = title; self.text = text; self.page = page; self.score = score
+        self.media = media
     }
-    public var sourceLabel: String { page.map { "\(title) · 第 \($0) 页" } ?? title }
+    public var sourceLabel: String {
+        if let media { return "\(title) · \(media.positionLabel)" }
+        return page.map { "\(title) · 第 \($0) 页" } ?? title
+    }
+    public var hasReadableEvidence: Bool { media == nil || media?.textSource != nil }
 }
 
 public struct LibraryNote: Identifiable, Codable, Equatable, Sendable {
@@ -145,13 +156,16 @@ public struct AppSettings: Codable, Equatable, Sendable {
 public struct ModelStatus: Sendable {
     public var embeddingAvailable: Bool
     public var embeddingDetail: String
+    public var embeddingModalities: [String]
     public var chatAvailable: Bool
     public var chatModels: [String]
     public var chatDetail: String
     public init(embeddingAvailable: Bool = false, embeddingDetail: String = "尚未检查",
-                chatAvailable: Bool = false, chatModels: [String] = [], chatDetail: String = "尚未检查") {
+                chatAvailable: Bool = false, chatModels: [String] = [], chatDetail: String = "尚未检查",
+                embeddingModalities: [String] = []) {
         self.embeddingAvailable = embeddingAvailable; self.embeddingDetail = embeddingDetail
         self.chatAvailable = chatAvailable; self.chatModels = chatModels; self.chatDetail = chatDetail
+        self.embeddingModalities = embeddingModalities
     }
 }
 

@@ -77,14 +77,22 @@ struct SettingsView: View {
                     connectionBadge(available: state.modelStatus?.embeddingAvailable)
                 }
                 endpointField("服务地址", text: $draft.embeddingBaseURL)
-                Text("为资料与查询生成向量。默认本机端口为 8871。")
+                Text("为文本、图片、音频和视频生成检索向量；可用模态以当前服务实际报告为准。默认本机端口为 8871。")
                     .font(.callout).foregroundStyle(.secondary)
                 if endpointsMatch, let status = state.modelStatus {
                     connectionDetail(status.embeddingDetail, available: status.embeddingAvailable)
+                    EmbeddingCapabilityNote(capabilities: state.embeddingCapabilities)
                 } else {
-                    Text(endpointsMatch ? "尚未完成连接检测。" : "地址已更改，保存并测试后更新连接状态。")
+                    Text(endpointsMatch ? "模型能力尚未检测，尚不能确认图片、音频和视频是否可用。"
+                         : "地址已更改，保存并测试后更新连接状态与媒体能力。")
                         .font(.callout).foregroundStyle(.secondary)
                 }
+                Text("媒体导入和文件查询会处理全部片段；不设文件大小、数量或总时长配额。格式、编码或模型能力不支持时，会说明具体原因。")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("图片和视频可能包含本机 OCR 文字。本应用不录音，也不提供语音转写；纯媒体语义索引请到搜索中查看或播放核对。")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -130,7 +138,7 @@ struct SettingsView: View {
                     Text("已保存的模型不在当前服务返回的列表中，请重新选择。")
                         .font(.callout).foregroundStyle(.orange)
                 } else {
-                    Text("模型在本机生成回答；首次加载较大模型可能需要等待。")
+                    Text("模型基于真实文字或 OCR 在本机生成回答；没有文字的媒体请到搜索中查看或播放。首次加载较大模型可能需要等待。")
                         .font(.callout).foregroundStyle(.secondary)
                 }
             }

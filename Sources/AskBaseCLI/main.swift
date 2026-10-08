@@ -22,8 +22,11 @@ struct AskBaseCLI {
                   askbase status
                   askbase import <file-or-folder> ...
                   askbase search <question>
+                  askbase search-media <image-audio-or-video>
+                  askbase reindex <document-id>
                   askbase ask --model <ollama-model> <question>
                   askbase smoke [--model <ollama-model>]
+                  askbase media-smoke
                 Options: --root <library-directory>, --kb <knowledge-base-id>
                 Smoke always uses an isolated temporary library and synthetic documents.
                 """)
@@ -32,6 +35,10 @@ struct AskBaseCLI {
             arguments.removeFirst()
             if command == "smoke" {
                 try await smoke(model: model)
+                return
+            }
+            if command == "media-smoke" {
+                try await MediaSmoke.run()
                 return
             }
             let root = rootOption.map { URL(fileURLWithPath: $0) } ?? KnowledgeEngine.defaultRoot
@@ -46,6 +53,7 @@ struct AskBaseCLI {
                 try printJSON([
                     "embedding_ready": status.embeddingAvailable,
                     "embedding": status.embeddingDetail,
+                    "embedding_modalities": status.embeddingModalities,
                     "chat_ready": status.chatAvailable,
                     "chat_models": status.chatModels,
                     "documents": snapshot.documents.count,
@@ -59,7 +67,15 @@ struct AskBaseCLI {
                 if !report.failures.isEmpty { exit(1) }
             case "search":
                 let results = try await engine.search(query: arguments.joined(separator: " "), knowledgeBaseID: kbID)
-                try printJSON(results.map { ["source": $0.sourceLabel, "text": $0.text, "score": $0.score, "chunk_id": $0.id] })
+                try printSearchResults(results)
+            case "search-media":
+                guard arguments.count == 1 else { throw AskBaseError.invalidInput("请选择一个图片、音频或视频文件。") }
+                let results = try await engine.search(mediaURL: URL(fileURLWithPath: arguments[0]), knowledgeBaseID: kbID)
+                try printSearchResults(results)
+            case "reindex":
+                guard arguments.count == 1 else { throw AskBaseError.invalidInput("请提供资料 ID。") }
+                try await engine.reindex(documentID: arguments[0])
+                try printJSON(["reindexed": arguments[0]])
             case "ask":
                 if let model {
                     var settings = try await engine.settings()
@@ -83,6 +99,17 @@ struct AskBaseCLI {
     static func printJSON(_ value: Any) throws {
         let bytes = try JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
         print(String(decoding: bytes, as: UTF8.self))
+    }
+
+    private static func printSearchResults(_ results: [SearchResult]) throws {
+        try printJSON(results.map { result -> [String: Any] in
+            var row: [String: Any] = ["source": result.sourceLabel, "text": result.text,
+                                     "score": result.score, "chunk_id": result.id, "document_id": result.documentID]
+            if let media = result.media {
+                row["media"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(media))
+            }
+            return row
+        })
     }
 
     static func smoke(model: String?) async throws {

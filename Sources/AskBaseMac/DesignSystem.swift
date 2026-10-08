@@ -195,7 +195,11 @@ struct SourceCard: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(source.title).font(compact ? .callout.weight(.medium) : .headline)
                             .foregroundStyle(.primary).lineLimit(2)
-                        if let page = source.page {
+                        if let media = source.media {
+                            Label("\(media.kind.label) · \(MediaEvidence.position(for: media))",
+                                  systemImage: media.kind.symbol)
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else if let page = source.page {
                             Text("第 \(page) 页").font(.caption).foregroundStyle(.secondary)
                         }
                     }
@@ -203,15 +207,27 @@ struct SourceCard: View {
                     Image(systemName: "arrow.up.right").font(.caption)
                         .foregroundStyle(.tertiary).accessibilityHidden(true)
                 }
-                Text(source.text)
-                    .font(compact ? .caption : .body)
-                    .foregroundStyle(.secondary)
-                    .lineSpacing(compact ? 2 : 4)
-                    .lineLimit(compact ? 2 : 5)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                if source.hasReadableEvidence, MediaEvidence.isReadable(text: source.text, media: source.media) {
+                    if let label = source.media?.textSource?.label {
+                        Label(label, systemImage: "text.viewfinder")
+                            .font(.caption).foregroundStyle(AppPalette.accent)
+                    }
+                    Text(source.text)
+                        .font(compact ? .caption : .body)
+                        .foregroundStyle(.secondary)
+                        .lineSpacing(compact ? 2 : 4)
+                        .lineLimit(compact ? 2 : 5)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else if let media = source.media {
+                    Text(MediaEvidence.summary(for: media))
+                        .font(compact ? .caption : .body).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if !compact {
                     HStack {
-                        Text("查看来源与原文件").foregroundStyle(AppPalette.accent)
+                        Text(source.media == nil ? "查看来源与原文件"
+                             : source.media?.kind == .image ? "查看原图与所选帧／页" : "查看来源与播放片段")
+                            .foregroundStyle(AppPalette.accent)
                         Spacer()
                         if source.score.isFinite {
                             Text("排序分数 \(source.score.formatted(.number.precision(.fractionLength(3))))")
@@ -229,7 +245,21 @@ struct SourceCard: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("来源 \(number)，\(source.sourceLabel)")
-        .accessibilityHint("打开引用全文和原始文件")
+        .accessibilityHint(source.media == nil ? "打开引用全文和原始文件" : "预览本机原件，媒体不会自动播放")
+    }
+}
+
+struct EmbeddingCapabilityNote: View {
+    let capabilities: EmbeddingCapabilities
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(capabilities.reportedLabel).textSelection(.enabled)
+            if let reason = capabilities.mediaUnavailableReason {
+                Text(reason).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .font(.caption).foregroundStyle(.secondary)
     }
 }
 
@@ -268,10 +298,12 @@ struct ConnectionLine: View {
 extension LibraryDocument {
     var displayFileType: String {
         let ext = (fileName as NSString).pathExtension.uppercased()
+        if let media { return ext.isEmpty ? media.kind.label : "\(media.kind.label) · \(ext)" }
         return ext.isEmpty ? "文件" : ext
     }
     var fileSymbol: String {
-        switch (fileName as NSString).pathExtension.lowercased() {
+        if let media { return media.kind.symbol }
+        return switch (fileName as NSString).pathExtension.lowercased() {
         case "pdf": "doc.richtext"
         case "md", "markdown": "doc.plaintext"
         case "swift", "py", "js", "ts", "tsx", "jsx", "rs", "go", "c", "cpp", "h", "java", "sh":

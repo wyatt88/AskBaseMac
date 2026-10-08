@@ -1,0 +1,25 @@
+{
+  "status": "ok",
+  "model": "embeddinggemma-2",
+  "revision": "914f7f89142e33e77833254d9c9b90c3cef7303b",
+  "backend": "mlx",
+  "dtype": "bfloat16",
+  "dimensions": 768,
+  "encoder_signature": "0ea16f19627ece8078d464d0efc776527b40babba613412285f58080db0d1cce",
+  "media_encoder_signature": "686068d8432dfa3b51de756ecfacf1c492a034f1f87cac8f98f0bf28dd810cf7",
+  "modalities": [
+    "text",
+    "image",
+    "audio",
+    "video"
+  ],
+  "media_status": "ready",
+  "source_matches_installed_runtime": {
+    "encoder.py": true,
+    "media_encoder.py": true,
+    "server.py": true,
+    "config.json": true,
+    "requirements.lock.txt": true
+  },
+  "date": "2026-10-09"
+}

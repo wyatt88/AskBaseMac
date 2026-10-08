@@ -130,6 +130,9 @@ public final class LibraryStore: @unchecked Sendable {
                 guard !document.contentHash.isEmpty, document.byteCount >= 0 else {
                     throw AskBaseError.invalidInput("资料缺少内容标识或文件大小无效。")
                 }
+                if let media = document.media, !media.isValid {
+                    throw AskBaseError.invalidInput("媒体类型或原文件时间范围无效。")
+                }
                 _ = try OriginalFileStorage.filename(relativePath: document.relativePath)
                 try requireBase(document.knowledgeBaseID)
                 if let existing = try documentUnlocked(id: document.id) {
@@ -137,7 +140,8 @@ public final class LibraryStore: @unchecked Sendable {
                           existing.relativePath == document.relativePath,
                           existing.contentHash == document.contentHash,
                           existing.fileName == document.fileName,
-                          existing.byteCount == document.byteCount else {
+                          existing.byteCount == document.byteCount,
+                          existing.media == document.media else {
                         throw AskBaseError.invalidInput("资料所属知识库与原文件身份不能修改，请重新导入。")
                     }
                 }
@@ -378,6 +382,41 @@ public final class LibraryStore: @unchecked Sendable {
                   chunk.encoderSignature == first.encoderSignature else {
                 throw AskBaseError.incompatibleIndex("分块必须使用相同签名的 768 维有限、归一化向量，原索引已保留。")
             }
+            switch (document.media, chunk.media) {
+            case (nil, nil): break
+            case (.some(let original), .some(let media)):
+                guard media.isValid, media.kind == original.kind, chunk.page == nil,
+                      !(media.encoderSignature ?? "").isEmpty, !(media.recipe ?? "").isEmpty,
+                      media.encoderSignature == first.media?.encoderSignature,
+                      media.recipe == first.media?.recipe else {
+                    throw AskBaseError.incompatibleIndex("媒体位置、预处理版本或编码签名无效，原索引已保留。")
+                }
+                if media.kind == .video, media.frameTimes?.isEmpty != false {
+                    throw AskBaseError.incompatibleIndex("视频分块必须保留实际抽取的帧位置。")
+                }
+            default:
+                throw AskBaseError.incompatibleIndex("资料与分块的媒体类型不一致，原索引已保留。")
+            }
+        }
+        if let media = document.media {
+            let ordered = chunks.sorted { $0.ordinal < $1.ordinal }
+            if media.kind == .image {
+                guard ordered.enumerated().allSatisfy({ $0.element.media?.imageIndex == $0.offset }) else {
+                    throw AskBaseError.incompatibleIndex("图片各帧／页必须连续索引，原索引已保留。")
+                }
+            } else {
+                var end = media.startSeconds ?? 0
+                for chunk in ordered {
+                    guard let segment = chunk.media, let start = segment.startSeconds, let next = segment.endSeconds,
+                          abs(start - end) < 0.001, next > start, next - start <= 10.001 else {
+                        throw AskBaseError.incompatibleIndex("音视频索引缺少时间段或片段超过 10 秒，原索引已保留。")
+                    }
+                    end = next
+                }
+                guard let durationEnd = media.endSeconds, abs(end - durationEnd) < 0.001 else {
+                    throw AskBaseError.incompatibleIndex("音视频索引没有覆盖完整文件，原索引已保留。")
+                }
+            }
         }
     }
 
@@ -440,7 +479,8 @@ public final class LibraryStore: @unchecked Sendable {
                     WHERE c.id = ? AND c.document_id = ? AND d.status = 'ready'
                     """, [.text(source.id), .text(source.documentID)]),
                   chunk.knowledgeBaseID == source.knowledgeBaseID,
-                  chunk.text == source.text, chunk.page == source.page else {
+                  chunk.text == source.text, chunk.page == source.page,
+                  chunk.media == source.media, source.hasReadableEvidence else {
                 throw AskBaseError.incompatibleIndex("回答来源已删除、已更新或不属于此知识库，请重新提问。")
             }
         }
@@ -457,7 +497,8 @@ public final class LibraryStore: @unchecked Sendable {
             let allSourcesStillValid = oldSources.allSatisfy { source in
                 let replacement = replacements[source.id]
                 return source.documentID != documentID ||
-                    (replacement?.text == source.text && replacement?.page == source.page && replacement != nil)
+                    (replacement?.text == source.text && replacement?.page == source.page &&
+                     replacement?.media == source.media && replacement != nil)
             }
             guard !allSourcesStillValid else { continue }
             // SearchResult has no persistent citation ordinal/tombstone field.

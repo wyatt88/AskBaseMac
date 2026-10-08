@@ -1,0 +1,20 @@
+{
+  "date": "2026-10-09",
+  "version": "0.3.0",
+  "build": "4",
+  "bundle_id": "cloud.doublewen.AskBaseMac",
+  "architecture": "arm64",
+  "codesign": "ad-hoc; strict verification passed",
+  "apple_notarized": false,
+  "release_excludes_debug_smoke": true,
+  "bundled_notices": [
+    "LICENSE",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "archive": "AskBase-Local-0.3.0-macOS-arm64.zip",
+  "archive_size_bytes": 2104078,
+  "archive_sha256": "e7d05bbc3f23e29a412677de2c76784fd7a7ce87cdba314caa1f5b30df897694",
+  "install_path": "~/Applications/AskBase Local.app",
+  "previous_app_backup": "ZIP archive retained locally; no additional indexed app installed"
+}
