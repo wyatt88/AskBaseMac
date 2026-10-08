@@ -11,7 +11,8 @@ third-party components or separately downloaded models.
 | MLX-VLM, Prince Canuma and contributors | Separately installed embedding-model loader | [MIT](https://github.com/Blaizzy/mlx-vlm/blob/4f4634bb813c0298cb1467bed2e957526c71d0b4/LICENSE), pinned to commit `4f4634bb813c0298cb1467bed2e957526c71d0b4`. |
 | Ollama | Optional, separately installed answer-model runtime | [MIT](https://github.com/ollama/ollama/blob/main/LICENSE). The runtime's license does not determine a selected model's license. |
 | SQLite | macOS system library | [Public domain](https://www.sqlite.org/copyright.html). |
-| SwiftUI, AppKit, PDFKit, Accelerate | Apple system frameworks | Provided by macOS under Apple's applicable terms; not relicensed by this project. |
+| SwiftUI, AppKit, Foundation, PDFKit, Accelerate | Apple system frameworks | Provided by macOS under Apple's applicable terms; not relicensed by this project. |
+| `/usr/bin/unzip` | macOS-provided archive utility | Invoked to read selected ZIP members; not bundled or relicensed by this project. Its existing system distribution terms apply. |
 
 The repository and macOS application package do not include model weights,
 Ollama, or Python dependency distributions. The embedding setup downloads

@@ -1,4 +1,4 @@
-# First implementation contract
+# Implementation contract
 
 Owner: main agent (networking, engine, integration, delivery). Worker A owns storage/import.
 Worker B owns native app UI. Shared Models.swift is owned by main. Use Swift 5 language
@@ -37,21 +37,31 @@ func recoverInterruptedImports() throws  // indexing -> failed with retry explan
 
 `public enum DocumentImporter`:
 ```
-static let supportedExtensions: Set<String>
-static func expand(_ urls: [URL]) throws -> [URL]   // bounded directory traversal, ignore hidden/symlinks
+static func expand(_ urls: [URL]) throws -> [URL]   // no quotas or extension filter; skip hidden descendants/packages/symlinks
 static func prepare(url: URL, knowledgeBaseID: String, originalsRoot: URL) throws -> PreparedDocument
-static func parse(url: URL) throws -> [ParsedPage]
+static func parse(url: URL, originalFilename: String? = nil) throws -> [ParsedPage]
 ```
 
 `public enum TextChunker`:
 ```
 static func chunks(pages: [ParsedPage], documentID: String, knowledgeBaseID: String,
                    maxCharacters: Int = 1200, overlap: Int = 160) -> [DocumentChunk]
+// Internal import/reindex entrypoint throws on cancellation, never returns a partial result.
+static func cancellableChunks(pages: [ParsedPage], documentID: String, knowledgeBaseID: String,
+                              maxCharacters: Int = 1200, overlap: Int = 160) throws -> [DocumentChunk]
 ```
 
-PDFKit PDF extraction preserving page number; plain UTF8/UTF16 text incl md/txt/code.
-Reject empty/scanned PDF and oversized/binary input with clear errors; no OCR promise.
-SHA256 whole file duplicate identity within KB. Store copies under UUID filenames.
+There are no fixed file byte, extracted text, PDF page, batch count, traversal count,
+directory depth, or extension quotas. Explicitly selected hidden files are accepted;
+folder imports skip hidden descendants, file packages, and symlinks.
+Use a private disk snapshot, incremental SHA256, and streamed managed-original copy so
+the parser, digest, and stored original refer to exactly the same bytes. Reject changed
+inputs, pipes, devices, unreadable content, and formats without usable text explicitly.
+Text chunking uses grapheme-safe String indices without a whole-document Character array.
+Reject scanned PDFs with a clear OCR message; no OCR promise.
+SHA256 whole file duplicate identity within KB. Store copies under UUID filenames,
+with an optional original extension. Reindex passes the original filename as a type hint.
+Cancellation must propagate instead of producing partial ready documents.
 SQLite transactionally replaces chunks and marks ready only on nonempty finite, L2-normalized 768d
 matching-signature embeddings. JSON encode records acceptable; keys/FKs ensure deletion.
 Tests: chunk bounds and multilingual coverage/overlap, duplicate identity, atomic failed

@@ -268,12 +268,12 @@ final class AppState: ObservableObject {
         guard canImport, let base = selectedKnowledgeBase else { return }
         let panel = NSOpenPanel()
         panel.title = "导入资料"
-        panel.message = "加入「\(base.name)」。可以选择文件或文件夹；文件夹中支持的资料会被逐一导入。"
+        panel.message = "加入「\(base.name)」。可多选文件或文件夹，不限制大小、数量或扩展名；逐个提取文字。"
         panel.prompt = "导入"
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
-        panel.showsHiddenFiles = false
+        panel.showsHiddenFiles = true
         panel.treatsFilePackagesAsDirectories = false
         isChoosingFiles = true
         let completion: (NSApplication.ModalResponse) -> Void = { [weak self] response in

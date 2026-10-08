@@ -33,7 +33,7 @@ struct LibraryView: View {
             if state.documents.isEmpty {
                 Divider()
                 EmptyState(symbol: "tray.and.arrow.down", title: "从第一份资料开始",
-                           detail: "选择 PDF、Markdown、文本或源代码，也可以拖入文件夹。导入后即可检索内容、查看来源并向知识库提问。") {
+                           detail: "选择文档、文本或源代码，也可以拖入文件夹。不限大小、数量或扩展名，提取文字后即可检索和提问。") {
                     VStack(spacing: 11) {
                         Button("选择文件或文件夹…") { state.chooseImport() }
                             .buttonStyle(.borderedProminent).disabled(!state.canImport)

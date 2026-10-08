@@ -1,0 +1,21 @@
+{
+  "version": "0.2.0",
+  "build": "3",
+  "delivery_date": "2026-10-09",
+  "architecture": "arm64",
+  "archive": "AskBase-Local-0.2.0-macOS-arm64.zip",
+  "archive_bytes": 1828813,
+  "archive_sha256": "b89cebaba514e33c5ce382b5a2c65851fc07b4e103bbf129fa44748df3b7642c",
+  "binary_sha256": "c2317f7e53dbc68659c610fcfbc4b2daf9a787c7825c5cb8a984c1b008d66517",
+  "checks": {
+    "release_build": true,
+    "installed_version": true,
+    "installed_signature": true,
+    "installed_and_archived_binary_match": true,
+    "bundled_licenses_match": true,
+    "installed_application_launched": true
+  },
+  "signature": "local ad-hoc; no Apple developer signature or notarization",
+  "build_location": "dist/build-products.noindex/AskBase Local.app",
+  "installation": "~/Applications/AskBase Local.app"
+}

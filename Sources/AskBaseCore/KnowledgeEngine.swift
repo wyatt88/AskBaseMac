@@ -15,8 +15,9 @@ public actor KnowledgeEngine {
 
     public init(root: URL = KnowledgeEngine.defaultRoot, embeddingClient: (any EmbeddingProviding)? = nil,
                 chatClient: (any ChatProviding)? = nil) throws {
-        self.root = root
-        self.store = try LibraryStore(root: root)
+        let store = try LibraryStore(root: root)
+        self.root = store.root
+        self.store = store
         self.embeddingOverride = embeddingClient
         self.chatOverride = chatClient
         try store.recoverInterruptedImports()
@@ -96,7 +97,7 @@ public actor KnowledgeEngine {
         let client = embedder(configuration)
         _ = try await client.health()
         let urls = try DocumentImporter.expand(urls)
-        guard !urls.isEmpty else { throw AskBaseError.importFailed("没有找到支持的文档。可导入 PDF、Markdown、TXT 和常见代码文件。") }
+        guard !urls.isEmpty else { throw AskBaseError.importFailed("所选位置没有可导入的普通文件。请选择包含文字的文档或文件夹。") }
         var report = ImportReport()
         for url in urls {
             try Task.checkCancellation()
@@ -105,15 +106,30 @@ public actor KnowledgeEngine {
             do {
                 let prepared = try DocumentImporter.prepare(url: url, knowledgeBaseID: knowledgeBaseID,
                                                             originalsRoot: root.appendingPathComponent("Originals"))
-                if let duplicate = try store.duplicate(contentHash: prepared.document.contentHash,
-                                                       knowledgeBaseID: knowledgeBaseID) {
-                    let path = root.appendingPathComponent(prepared.document.relativePath)
-                    try? FileManager.default.removeItem(at: path)
-                    report.skipped.append("\(url.lastPathComponent)：已存在（\(duplicate.status.label)）")
-                    continue
+                do {
+                    if let duplicate = try store.duplicate(contentHash: prepared.document.contentHash,
+                                                           knowledgeBaseID: knowledgeBaseID) {
+                        try OriginalFileStorage.remove(relativePath: prepared.document.relativePath,
+                                                       directory: root.appendingPathComponent("Originals"))
+                        report.skipped.append("\(url.lastPathComponent)：已存在（\(duplicate.status.label)）")
+                        continue
+                    }
+                    try store.upsertDocument(prepared.document)
+                } catch {
+                    let metadataError = error
+                    // Until metadata commits, no library record owns this copy.
+                    // Clean it on duplicate lookup / database errors as well.
+                    do {
+                        try OriginalFileStorage.remove(relativePath: prepared.document.relativePath,
+                                                       directory: root.appendingPathComponent("Originals"))
+                    } catch {
+                        throw AskBaseError.storage(
+                            "\(metadataError.localizedDescription)；未能清理导入副本：\(error.localizedDescription)"
+                        )
+                    }
+                    throw metadataError
                 }
                 pending = prepared.document
-                try store.upsertDocument(prepared.document)
                 let chunks = try await embedded(prepared.chunks, using: client)
                 try Task.checkCancellation()
                 guard try store.document(id: prepared.document.id) != nil else {
@@ -164,9 +180,10 @@ public actor KnowledgeEngine {
         reindexingDocuments.insert(documentID)
         defer { reindexingDocuments.remove(documentID) }
         do {
-            let pages = try DocumentImporter.parse(url: originalURL(documentID: documentID))
-            let chunks = TextChunker.chunks(pages: pages, documentID: documentID,
-                                            knowledgeBaseID: document.knowledgeBaseID)
+            let pages = try DocumentImporter.parse(url: originalURL(documentID: documentID),
+                                                  originalFilename: document.fileName)
+            let chunks = try TextChunker.cancellableChunks(pages: pages, documentID: documentID,
+                                                          knowledgeBaseID: document.knowledgeBaseID)
             let encoded = try await embedded(chunks, using: embedder(store.settings()))
             try Task.checkCancellation()
             try store.replaceChunks(documentID: documentID, chunks: encoded)
@@ -210,12 +227,8 @@ public actor KnowledgeEngine {
     }
     public func originalURL(documentID: String) throws -> URL {
         guard let document = try store.document(id: documentID) else { throw AskBaseError.invalidInput("原始资料已被删除。") }
-        let originals = root.appendingPathComponent("Originals").resolvingSymlinksInPath().standardizedFileURL
-        let file = root.appendingPathComponent(document.relativePath).resolvingSymlinksInPath().standardizedFileURL
-        guard file.path.hasPrefix(originals.path + "/"), FileManager.default.fileExists(atPath: file.path) else {
-            throw AskBaseError.storage("资料副本不存在或路径无效。")
-        }
-        return file
+        return try OriginalFileStorage.existingURL(relativePath: document.relativePath,
+                                                   directory: root.appendingPathComponent("Originals"))
     }
     public func documentChunks(documentID: String) throws -> [DocumentChunk] {
         try store.documentChunks(documentID: documentID)

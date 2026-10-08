@@ -1,5 +1,7 @@
 # AskBaseMac 独立工程审查
 
+0.2.0 导入更新的独立回归与八项修复见 [导入更新审查](IMPORT-REVIEW-0.2.0.md)。下文保留首版审查，不将历史检查冒充当前版本的新检查。
+
 审查日期：2026-10-07（Asia/Shanghai）。最终状态：累计发现的 1 项 P1、6 项 P2 **均已独立复核关闭**；本轮针对当前文件补核 F02/F04/F05/F06，限定审查范围内没有剩余交付阻塞。历史触发与失败证据保留，最终关闭依据见文末。没有修改应用源码。
 
 范围：`Sources/AskBaseCore/ModelClients.swift`、`KnowledgeEngine.swift`、`Retrieval.swift`，以及 `scripts/start_ollama.py`、`setup_embedding.py`、`build_app.py`。`Models.swift`、实现契约及被调用的安装/打包依赖仅用于核实接口和执行路径。为确认 F03，额外只读了 `LibraryStore.upsertDocument` 的实现，没有接管 storage/import 或 UI 审查。不运行 live 模型，不改真实资料库，不启动服务，不执行 SwiftPM 构建。

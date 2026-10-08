@@ -1,0 +1,29 @@
+{
+  "answer": "北辰计划的文档审核截止日为 10 月 18 日 [1]，负责人是林舟 [1]。",
+  "capture_method": "AppKit cacheDisplay of the actual app-owned window; debug build",
+  "checks": {
+    "detail_loaded_chunks": true,
+    "embedding_connected": true,
+    "empty_workspace_fits_window": true,
+    "import_has_no_failures": true,
+    "local_answer_model_selected": true,
+    "minimum_workspace_fits_window": true,
+    "native_chat_answer_matches_fixture": true,
+    "native_chat_has_sources": true,
+    "native_chat_no_error": true,
+    "native_chat_saved_two_messages": true,
+    "native_import_handler_indexed_examples": true,
+    "native_note_flushed": true,
+    "native_note_saved": true,
+    "native_search_has_relevant_first_source": true,
+    "search_no_error": true,
+    "source_sheet_presented": true,
+    "startup_ready": true
+  },
+  "input_method": "native AppState action handlers; not external mouse/keyboard automation",
+  "library_isolation": "fresh synthetic library explicitly selected at launch",
+  "model": "gemma4:31b-mlx",
+  "passed": 17,
+  "shutdown_method": "explicit debug-only note flush and process exit; normal application quit not evaluated",
+  "total": 17
+}

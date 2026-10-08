@@ -48,9 +48,8 @@ final class ImporterTests: XCTestCase {
             ("truncated-utf16.txt", Data([0xFF, 0xFE, 0x41])),
             ("high-surrogate.txt", Data([0xFF, 0xFE, 0x00, 0xD8])),
             ("low-surrogate.txt", Data([0xFE, 0xFF, 0xDC, 0x00])),
-            ("utf32.txt", Data([0xFF, 0xFE, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00])),
-            ("broken.pdf", Data("This is not a PDF".utf8)),
-            ("unsupported.exe", Data("executable".utf8))
+            ("broken.pdf", Data("%PDF-1.7\nThis PDF is incomplete".utf8)),
+            ("binary.exe", Data([0x4D, 0x5A, 0x90, 0x00, 0x03, 0x00]))
         ]
         for (filename, data) in invalid {
             let url = try file(filename, data: data)
@@ -61,18 +60,35 @@ final class ImporterTests: XCTestCase {
         }
     }
 
-    func testSizeAndExtractedTextLimitsAreEnforced() throws {
+    func testFileLargerThan32MiBIsParsedCompletely() throws {
         let oversized = try file("large.txt", data: Data())
         let handle = try FileHandle(forWritingTo: oversized)
-        try handle.truncate(atOffset: UInt64(DocumentImporter.maximumFileBytes + 1))
+        let block = Data(repeating: 0x61, count: 1_048_576)
+        for _ in 0..<33 { try handle.write(contentsOf: block) }
+        let tail = "\n完整资料的最后一行。"
+        try handle.write(contentsOf: Data(tail.utf8))
         try handle.close()
-        XCTAssertThrowsError(try DocumentImporter.parse(url: oversized)) {
-            XCTAssertTrue($0.localizedDescription.contains("32 MiB"))
+        let pages = try DocumentImporter.parse(url: oversized)
+        XCTAssertEqual(pages.count, 1)
+        XCTAssertEqual(pages[0].text.utf8.count, 33 * block.count + tail.utf8.count)
+        XCTAssertTrue(pages[0].text.hasSuffix(tail))
+    }
+
+    func testTextBeyondTwoMillionUnitsIsPreparedWithoutTruncation() throws {
+        let content = String(repeating: "中文abc。", count: 400_001) + "尾部标记"
+        XCTAssertGreaterThan(content.utf16.count, 2_000_000)
+        let url = try file("large-text.custom", data: Data(content.utf8))
+        let prepared = try DocumentImporter.prepare(url: url, knowledgeBaseID: "large",
+                                                    originalsRoot: temporary.appendingPathComponent("Originals"))
+        var reconstructed = try XCTUnwrap(prepared.chunks.first).text
+        for chunk in prepared.chunks.dropFirst() {
+            reconstructed.append(contentsOf: chunk.text.dropFirst(160))
         }
-        let tooMuchText = try file("text.txt", data: Data(repeating: 0x61, count: DocumentImporter.maximumTextUnits + 1))
-        XCTAssertThrowsError(try DocumentImporter.parse(url: tooMuchText)) {
-            XCTAssertTrue($0.localizedDescription.contains("200 万"))
-        }
+        XCTAssertEqual(reconstructed, content)
+        XCTAssertEqual(prepared.document.byteCount, content.utf8.count)
+        XCTAssertEqual(prepared.chunks.map(\.ordinal), Array(prepared.chunks.indices))
+        XCTAssertEqual(try Data(contentsOf: temporary.appendingPathComponent(prepared.document.relativePath)),
+                       Data(content.utf8))
     }
 
     func testPDFExtractionPreservesOriginalPageNumbersIncludingBlankPages() throws {
@@ -97,7 +113,7 @@ final class ImporterTests: XCTestCase {
         }
     }
 
-    func testEncryptedPDFAndPageLimitAreRejected() throws {
+    func testEncryptedPDFRequiresUnlocking() throws {
         let document = try XCTUnwrap(PDFDocument(data: pdf(pages: ["Secret"])))
         let encrypted = temporary.appendingPathComponent("encrypted.pdf")
         XCTAssertTrue(document.write(to: encrypted, withOptions: [.userPasswordOption: "fixture-secret",
@@ -105,11 +121,19 @@ final class ImporterTests: XCTestCase {
         XCTAssertThrowsError(try DocumentImporter.parse(url: encrypted)) {
             XCTAssertTrue($0.localizedDescription.contains("加密"))
         }
-        let long = try file("too-many-pages.pdf",
-                            data: pdf(pages: Array(repeating: "", count: DocumentImporter.maximumPDFPages + 1)))
-        XCTAssertThrowsError(try DocumentImporter.parse(url: long)) {
-            XCTAssertTrue($0.localizedDescription.contains("页上限"))
-        }
+    }
+
+    func testPDFBeyondTwoThousandPagesPreservesFinalPage() throws {
+        var contents = Array<String?>(repeating: "", count: 2_001)
+        contents[0] = "First page"
+        contents[2_000] = "Last page 完整末页"
+        let long = try file("long.pdf", data: pdf(pages: contents))
+        let pages = try DocumentImporter.parse(url: long)
+        XCTAssertEqual(pages.count, 2_001)
+        XCTAssertEqual(pages.last?.page, 2_001)
+        XCTAssertTrue(try XCTUnwrap(pages.last?.text).contains("完整末页"))
+        let chunks = TextChunker.chunks(pages: pages, documentID: "pdf", knowledgeBaseID: "base")
+        XCTAssertEqual(chunks.map(\.page), [1, 2_001])
     }
 
     func testPreparedCopiesHashWholeFileAndRemainIndependentOfSource() throws {
@@ -151,47 +175,87 @@ final class ImporterTests: XCTestCase {
         try FileManager.default.createDirectory(at: folder.appendingPathComponent("nested"), withIntermediateDirectories: true)
         let first = try file("Selection/a.TXT", data: Data("甲".utf8))
         let second = try file("Selection/nested/b.swift", data: Data("let 中文 = true".utf8))
-        _ = try file("Selection/.hidden.md", data: Data("忽略".utf8))
-        _ = try file("Selection/unsupported.bin", data: Data([0x01]))
+        let hidden = try file("Selection/.hidden.md", data: Data("明确选中时可导入".utf8))
+        let binary = try file("Selection/unsupported.bin", data: Data([0x01]))
         try FileManager.default.createDirectory(at: folder.appendingPathComponent(".hidden-dir"), withIntermediateDirectories: true)
         _ = try file("Selection/.hidden-dir/hidden.txt", data: Data("忽略目录".utf8))
         let outside = try file("outside.txt", data: Data("不得跟随".utf8))
         try FileManager.default.createSymbolicLink(at: folder.appendingPathComponent("link.txt"), withDestinationURL: outside)
         try FileManager.default.createSymbolicLink(at: folder.appendingPathComponent("loop"), withDestinationURL: folder)
         let results = try DocumentImporter.expand([folder, first, folder.appendingPathComponent("nested")])
-        XCTAssertEqual(Set(results.map(\.path)), Set([first.path, second.path]))
-        XCTAssertEqual(results.count, 2)
+        XCTAssertEqual(Set(results.map(\.path)), Set([first.path, second.path, binary.path]))
+        XCTAssertEqual(results.count, 3)
+        XCTAssertEqual(try DocumentImporter.expand([hidden]), [hidden])
+        XCTAssertThrowsError(try DocumentImporter.parse(url: binary))
         XCTAssertEqual(try DocumentImporter.expand([folder.appendingPathComponent("link.txt")]), [])
     }
 
-    func testDirectoryDepthAndBatchSizeFailInsteadOfSilentlyTruncating() throws {
+    func testDeepDirectoriesAndMoreThanOneThousandFilesAreEnumeratedCompletely() throws {
         let selected = temporary.appendingPathComponent("Deep")
         var directory = selected
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        for index in 0..<DocumentImporter.maximumDirectoryDepth + 1 {
+        for index in 0..<20 {
             directory.appendPathComponent("level-\(index)")
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         }
-        try Data("太深".utf8).write(to: directory.appendingPathComponent("deep.txt"))
-        XCTAssertThrowsError(try DocumentImporter.expand([selected])) {
-            XCTAssertTrue($0.localizedDescription.contains("层"))
+        let deep = directory.appendingPathComponent("deep.txt")
+        try Data("深层资料".utf8).write(to: deep)
+        var expected = Set([deep.path])
+        for index in 0..<1_001 {
+            let entry = selected.appendingPathComponent("document-\(index).custom")
+            try Data("资料 \(index)".utf8).write(to: entry)
+            expected.insert(entry.path)
         }
+        let expanded = try DocumentImporter.expand([selected])
+        XCTAssertEqual(Set(expanded.map(\.path)), expected)
+        XCTAssertEqual(expanded.count, 1_002)
         let url = try file("single.txt", data: Data("内容".utf8))
-        XCTAssertThrowsError(try DocumentImporter.expand(Array(repeating: url, count: DocumentImporter.maximumFiles + 1)))
+        XCTAssertEqual(try DocumentImporter.expand(Array(repeating: url, count: 1_001)), [url])
     }
 
-    func testHiddenEntriesStillCountAgainstTraversalBudget() throws {
+    func testMoreThanTenThousandHiddenEntriesDoNotBlockVisibleDocuments() throws {
         let folder = temporary.appendingPathComponent("HiddenOnly")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        for index in 0..<DocumentImporter.maximumVisitedEntries {
+        for index in 0..<10_001 {
             let path = folder.appendingPathComponent(".hidden-\(index).txt").path
             guard FileManager.default.createFile(atPath: path, contents: Data()) else {
-                throw AskBaseError.storage("无法创建临时遍历边界测试文件")
+                throw AskBaseError.storage("无法创建临时遍历测试文件")
             }
         }
-        XCTAssertThrowsError(try DocumentImporter.expand([folder])) {
-            XCTAssertTrue($0.localizedDescription.contains("\(DocumentImporter.maximumVisitedEntries)"))
+        let visible = try file("HiddenOnly/visible.txt", data: Data("可见资料".utf8))
+        XCTAssertEqual(try DocumentImporter.expand([folder]), [visible])
+    }
+
+    func testExtensionlessAndUnlistedFilesHaveManagedCopiesThatCanBeRemoved() throws {
+        let originals = temporary.appendingPathComponent("Originals")
+        for name in ["README", "notes.my-custom-format", ".env.example", "a." + String(repeating: "x", count: 220)] {
+            let source = try file(name, data: Data("测试资料 \(name)".utf8))
+            let prepared = try DocumentImporter.prepare(url: source, knowledgeBaseID: "base", originalsRoot: originals)
+            let filename = try OriginalFileStorage.filename(relativePath: prepared.document.relativePath)
+            let copy = originals.appendingPathComponent(filename)
+            XCTAssertEqual(try Data(contentsOf: source), try Data(contentsOf: copy))
+            XCTAssertFalse(prepared.chunks.isEmpty)
+            try OriginalFileStorage.remove(relativePath: prepared.document.relativePath, directory: originals)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: copy.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
         }
+    }
+
+    func testCancelledImportAndChunkingDoNotProducePartialResults() async throws {
+        let source = try file("cancel.txt", data: Data("取消测试".utf8))
+        let originals = temporary.appendingPathComponent("Originals")
+        try await Task.detached {
+            withUnsafeCurrentTask { $0?.cancel() }
+            XCTAssertThrowsError(try DocumentImporter.expand([source])) { XCTAssertTrue($0 is CancellationError) }
+            XCTAssertThrowsError(try DocumentImporter.parse(url: source)) { XCTAssertTrue($0 is CancellationError) }
+            XCTAssertThrowsError(try DocumentImporter.prepare(url: source, knowledgeBaseID: "base", originalsRoot: originals)) {
+                XCTAssertTrue($0 is CancellationError)
+            }
+            XCTAssertThrowsError(try TextChunker.cancellableChunks(
+                pages: [ParsedPage(text: "尚未分块的资料")], documentID: "d", knowledgeBaseID: "b"
+            )) { XCTAssertTrue($0 is CancellationError) }
+        }.value
+        XCTAssertFalse(FileManager.default.fileExists(atPath: originals.path))
     }
 
     func testSymlinkAndNamedPipeInputsAreRejectedWithoutBlockingOrFollowing() throws {

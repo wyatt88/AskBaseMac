@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import Darwin
 import Foundation
 import AskBaseCore
 
@@ -15,6 +16,7 @@ enum AppSmokeVerifier {
         started = true
         let output = URL(fileURLWithPath: args[index + 1], isDirectory: true)
         var checks: [String: Bool] = [:]
+        var succeeded = false
         do {
             guard let root = state.rootURL, root.lastPathComponent == "ui-smoke-library",
                   root.deletingLastPathComponent().lastPathComponent.hasPrefix("AskBase-UIVerify-"),
@@ -34,8 +36,7 @@ enum AppSmokeVerifier {
             try capture("01-empty-settled", to: output)
             checks["empty_workspace_fits_window"] = true
             if args.contains("--ui-empty-only") {
-                NSApp.terminate(nil)
-                return
+                await finishVerification(state: state, succeeded: true)
             }
             guard let examples = Bundle.main.resourceURL?.appendingPathComponent("Examples"),
                   let base = state.selectedKnowledgeBase else { throw AskBaseError.storage("Bundled examples unavailable.") }
@@ -115,9 +116,11 @@ enum AppSmokeVerifier {
                 "capture_method": "AppKit cacheDisplay of the actual app-owned window; debug build",
                 "input_method": "native AppState action handlers; not external mouse/keyboard automation",
                 "library_isolation": "fresh synthetic library explicitly selected at launch",
+                "shutdown_method": "explicit debug-only note flush and process exit; normal application quit not evaluated",
             ]
             let data = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
             try data.write(to: output.appendingPathComponent("ui-verification.json"))
+            succeeded = checks.values.allSatisfy { $0 }
         } catch {
             let report: [String: Any] = ["checks": checks, "error": error.localizedDescription]
             if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
@@ -125,7 +128,15 @@ enum AppSmokeVerifier {
                 try? data.write(to: output.appendingPathComponent("ui-verification.json"))
             }
         }
-        NSApp.terminate(nil)
+        await finishVerification(state: state, succeeded: succeeded)
+    }
+
+    private static func finishVerification(state: AppState, succeeded: Bool) async -> Never {
+        // A command-line verification run must finish even when AppKit's
+        // deferred termination loop cannot service the delegate's async task.
+        // This path is excluded from release builds and still flushes notes.
+        let saved = await state.prepareToQuit()
+        Darwin.exit(succeeded && saved ? EXIT_SUCCESS : EXIT_FAILURE)
     }
 
     private static func wait(until condition: () -> Bool, timeout: TimeInterval) async throws {

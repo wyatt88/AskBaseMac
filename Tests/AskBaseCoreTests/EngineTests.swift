@@ -103,6 +103,34 @@ final class EngineTests: XCTestCase {
         XCTAssertEqual(hits.count, 1)
     }
 
+    func testUnlistedAndExtensionlessTextImportReindexAndDeleteWithIsolatedFailures() async throws {
+        let engine = try engine()
+        let kb = try await engine.snapshot().knowledgeBases[0]
+        let custom = try fixture("mission.unlisted-format", "火星任务由林舟负责。")
+        let extensionless = try fixture("README", "知识库完整保存无扩展名的文字资料。")
+        let binary = directory.appendingPathComponent("image.bin")
+        try Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]).write(to: binary)
+        let report = try await engine.importDocuments(urls: [custom, binary, extensionless], knowledgeBaseID: kb.id)
+        XCTAssertEqual(Set(report.imported.map(\.fileName)), ["mission.unlisted-format", "README"])
+        XCTAssertEqual(report.failures.count, 1)
+        XCTAssertTrue(report.failures[0].contains("image.bin"))
+        for document in report.imported {
+            XCTAssertEqual(document.status, .ready)
+            let original = try await engine.originalURL(documentID: document.id)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: original.path))
+            try await engine.reindex(documentID: document.id)
+            let chunks = try await engine.documentChunks(documentID: document.id)
+            XCTAssertFalse(chunks.isEmpty)
+            XCTAssertTrue(chunks.allSatisfy { $0.embedding.count == 768 && $0.encoderSignature == "test-space-v1" })
+            try await engine.deleteDocument(id: document.id)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: original.path))
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: custom.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: extensionless.path))
+        let snapshot = try await engine.snapshot()
+        XCTAssertTrue(snapshot.documents.isEmpty)
+    }
+
     func testBadEmbeddingsNeverMarkAFileReady() async throws {
         let engine = try engine(FakeEmbedder(badVectors: true))
         let kb = try await engine.snapshot().knowledgeBases[0]

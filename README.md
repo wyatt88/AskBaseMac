@@ -1,6 +1,6 @@
 # AskBase Local
 
-原生 macOS 本地知识库。把 PDF、Markdown、文字和代码留在自己的 Mac 上，用 **EmbeddingGemma 2** 搜索，再用本地回答模型做带来源的 RAG 问答。
+原生 macOS 本地知识库。把 PDF、办公文档、电子书、文字和代码留在自己的 Mac 上，用 **EmbeddingGemma 2** 搜索，再用本地回答模型做带来源的 RAG 问答。
 
 开源许可证：[Apache License 2.0](LICENSE)。
 
@@ -10,17 +10,39 @@
 
 上图是实际原生窗口，使用仓库中的虚构资料和本地模型完成问答。
 
-## 首版功能
+## 功能
 
 - **多知识库**：按项目分开资料、对话和笔记。
-- **导入资料**：选择文件或文件夹、拖放导入；PDF 保留页码，文字按段切分；完整文件 SHA256 去重。
+- **导入资料**：选择文件或文件夹、拖放导入；不设文件大小、数量、页数、目录层级或扩展名配额；完整文件 SHA256 去重。
 - **语义搜索**：EmbeddingGemma 2 768 维向量，加上轻量关键词排序；查看片段和原文副本。
 - **知识问答**：先检索当前知识库，再调用本机 Ollama；保存对话历史，回答附带编号来源。
 - **资料管理**：重命名、收藏、标签、重新索引、删除；清除相关索引和失效来源。
 - **个人笔记**：独立编辑、保存、导出 Markdown。笔记不会自动成为检索资料。
 - **本地模型设置**：检查两个模型服务的连接状态，选择已安装的回答模型；只允许本机地址。
 
-扫描 PDF 需要先 OCR。当前不支持 DOCX/PPTX、网页抓取、自动 Wiki、图谱、MCP 或云端同步。首版是个人资料库实现，还没有大规模语料性能或真实业务检索质量结论。
+扫描 PDF 需要先 OCR。当前不支持网页抓取、自动 Wiki、图谱、MCP 或云端同步。这是个人资料库实现，还没有大规模语料性能或真实业务检索质量结论。
+
+### 文件导入
+
+0.2.0 移除了原先的 32 MiB 文件、200 万文本单元、2,000 页 PDF、1,000 个文件、10,000 个目录条目及 16 层目录限制，也取消了扩展名白名单。
+
+| 内容 | 提取方式 |
+| --- | --- |
+| PDF | 提取文字并保留原始页码，空白页不改变后续页号 |
+| Word DOCX、Excel XLSX、PowerPoint PPTX | 读取文档正文、表格单元格或幻灯片文字 |
+| RTF、ODT、EPUB | 提取富文本、开放文档或电子书章节中的文字 |
+| 本地 HTML/XHTML | 提取正文文字，忽略脚本和样式，不加载外部页面或资源 |
+| Markdown、TXT、CSV/TSV、JSON/XML、代码及其他文本 | 严格识别 UTF-8 / UTF-16 / UTF-32；接受自定义扩展名和无扩展名文件 |
+
+格式主要按内容识别。取消扩展名过滤不等于能从任意二进制文件提取文字；损坏文件、旧版二进制 DOC/XLS/PPT、XLSB、iWork、图片、音视频和扫描件，需要先转换为可提取文字的文档。单个文件解析失败会在导入结果中列出，其他文件继续处理。
+
+办公文档提取覆盖主要文字内容，不还原排版。DOCX 页眉、页脚、脚注和 PPTX 演讲备注尚未提取；XLSX 读取已存储的值，缺少缓存值时保留公式文字，不重新计算公式或转换日期样式。PDF 和 PPTX 保留页／幻灯片编号，工作表与 EPUB 章节按原顺序提取。
+
+含有外部合并正文（`altChunk`）的 DOCX 需要先用 Word 打开并另存。办公文档声明的主部件或 EPUB 章节缺失时会明确报错，避免把不完整正文当作成功导入。
+
+导入按 1 MiB 缓冲分段复制和计算哈希，再从同一份暂存副本解析，避免哈希、文字和原文对应不同版本。应用不设固定导入配额，但文本、分块和向量仍占用内存，暂存文件和原文副本也需要磁盘空间；实际容量取决于 Mac 资源。
+
+文件夹导入跳过隐藏项、应用包和符号链接。可以在选择面板中直接选中隐藏文件导入。处理过程中可停止，已完成的资料保留，未完成的索引可重试。
 
 ## 快速开始
 
@@ -38,7 +60,7 @@ python3 scripts/build_app.py --install
 open "$HOME/Applications/AskBase Local.app"
 ```
 
-构建脚本生成真正的 `.app`，安装到 `~/Applications`，并生成 `dist/AskBase-Local-0.1.1-macOS-arm64.zip`。构建副本保存在 `dist/build-products.noindex/`，避免与安装版同时出现在系统应用搜索中；许可文件随应用打包。应用使用本地临时签名，尚未做 Apple 开发者签名、公证或 App Store 发布。其他 Mac 下载预编译版本时可能需要在系统设置中允许打开；也可以直接从源码构建。
+构建脚本生成真正的 `.app`，安装到 `~/Applications`，并生成 `dist/AskBase-Local-0.2.0-macOS-arm64.zip`。构建副本保存在 `dist/build-products.noindex/`，避免与安装版同时出现在系统应用搜索中；许可文件随应用打包。应用使用本地临时签名，尚未做 Apple 开发者签名、公证或 App Store 发布。其他 Mac 下载预编译版本时可能需要在系统设置中允许打开；也可以直接从源码构建。
 
 ### EmbeddingGemma 2
 
@@ -103,12 +125,14 @@ python3 services/embeddinggemma2/scripts/test_deployment_guards.py
 swift run askbase status
 swift run askbase smoke
 swift run askbase smoke --model gemma4:31b-mlx
+python3 scripts/verify_import_formats.py
 ```
 
-最后一条需要本机已安装对应模型，也可替换为自己的模型名。`smoke` 自动创建并删除隔离库，验证导入、去重、检索、重建索引、来源撤销和持久化；给出模型名时也实际生成答案。
+带 `--model` 的命令需要本机已安装对应模型，也可替换为自己的模型名。`smoke` 自动创建并删除隔离库，验证导入、去重、检索、重建索引、来源撤销和持久化；给出模型名时也实际生成答案。`verify_import_formats.py` 使用真实本机嵌入服务和 10 份合成格式样本，检查文字、原文、向量和检索，全程使用自动清理的独立临时库。
 
 - [架构与数据边界](docs/ARCHITECTURE.md)
 - [实际验收记录](docs/VERIFICATION.md)
+- [0.2.0 导入更新与验收](docs/IMPORT-UPDATE-0.2.0.md)
 - [实现契约](docs/IMPLEMENTATION-CONTRACT.md)
 - [独立审查](docs/REVIEW.md)
 - [第三方组件](THIRD_PARTY_NOTICES.md)
