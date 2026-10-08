@@ -1,6 +1,8 @@
 import Foundation
 import AskBaseCore
 
+// Keep the @main entry point outside main.swift: SwiftPM otherwise treats a
+// multi-file executable as a top-level-code module on older Swift toolchains.
 @main
 struct AskBaseCLI {
     static func main() async {
