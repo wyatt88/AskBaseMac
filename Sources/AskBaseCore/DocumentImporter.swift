@@ -1,4 +1,3 @@
-import CryptoKit
 import Darwin
 import Foundation
 
@@ -77,7 +76,7 @@ public enum DocumentImporter {
         guard !knowledgeBaseID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AskBaseError.invalidInput("请选择知识库。")
         }
-        let snapshot = try snapshotInput(url)
+        let snapshot = try FileSnapshotReader.read(url)
         defer { snapshot.remove() }
         let pages = try DocumentTextExtractor.parse(url: snapshot.url, originalFilename: url.lastPathComponent)
         return try prepared(snapshot: snapshot, original: url, knowledgeBaseID: knowledgeBaseID,
@@ -92,7 +91,7 @@ public enum DocumentImporter {
         guard !knowledgeBaseID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AskBaseError.invalidInput("请选择知识库。")
         }
-        let snapshot = try snapshotInput(url)
+        let snapshot = try await FileSnapshotReader.readAsync(url)
         defer { snapshot.remove() }
         if let plan = try await MediaProcessor.inspect(url: snapshot.url) {
             return try prepared(snapshot: snapshot, original: url, knowledgeBaseID: knowledgeBaseID,
@@ -104,7 +103,7 @@ public enum DocumentImporter {
     }
 
     private static func prepared(
-        snapshot: InputSnapshot, original url: URL, knowledgeBaseID: String, originalsRoot: URL,
+        snapshot: InputFileSnapshot, original url: URL, knowledgeBaseID: String, originalsRoot: URL,
         pages: [ParsedPage] = [], media: MediaPlan? = nil
     ) throws -> PreparedDocument {
         try Task.checkCancellation()
@@ -163,7 +162,7 @@ public enum DocumentImporter {
     static func withSnapshot<T>(
         url: URL, expectedHash: String? = nil, operation: (URL) async throws -> T
     ) async throws -> T {
-        let snapshot = try snapshotInput(url)
+        let snapshot = try await FileSnapshotReader.readAsync(url)
         defer { snapshot.remove() }
         if let expectedHash, expectedHash != snapshot.contentHash {
             throw AskBaseError.importFailed("资料副本的内容已改变，请重新导入；旧索引已保留。")
@@ -172,83 +171,12 @@ public enum DocumentImporter {
     }
 
     public static func parse(url: URL, originalFilename: String? = nil) throws -> [ParsedPage] {
-        let snapshot = try snapshotInput(url)
+        let snapshot = try FileSnapshotReader.read(url)
         defer { snapshot.remove() }
         return try DocumentTextExtractor.parse(url: snapshot.url,
                                                 originalFilename: originalFilename ?? url.lastPathComponent)
     }
 
-    private struct InputSnapshot {
-        let directory: URL
-        let url: URL
-        let contentHash: String
-        let byteCount: Int
-
-        func remove() { try? FileManager.default.removeItem(at: directory) }
-    }
-
-    /// A private disk snapshot bounds the copy/hash buffer independently of file
-    /// size and prevents parsing a different revision from the one being stored.
-    private static func snapshotInput(_ url: URL) throws -> InputSnapshot {
-        try Task.checkCancellation()
-        guard url.isFileURL else { throw AskBaseError.importFailed("只能导入本机文件。") }
-        // O_NONBLOCK prevents opening a disguised FIFO from hanging the app;
-        // O_NOFOLLOW plus fstat prevents importing a link or device as a file.
-        let descriptor = Darwin.open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
-        guard descriptor >= 0 else {
-            throw AskBaseError.importFailed("无法打开“\(url.lastPathComponent)”；请检查权限，且不要选择符号链接。")
-        }
-        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-        defer { try? handle.close() }
-        var before = stat()
-        guard fstat(descriptor, &before) == 0, (before.st_mode & S_IFMT) == S_IFREG else {
-            throw AskBaseError.importFailed("只能导入普通文件，不支持目录、设备或管道。")
-        }
-        guard before.st_size > 0 else { throw AskBaseError.importFailed("文件为空，没有可索引的内容。") }
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AskBase-Import-\(UUID())", isDirectory: true)
-        do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
-                                                    attributes: [.posixPermissions: 0o700])
-        } catch {
-            throw AskBaseError.importFailed("无法创建导入暂存目录：\(error.localizedDescription)")
-        }
-        var completed = false
-        defer { if !completed { try? FileManager.default.removeItem(at: directory) } }
-        let destination = directory.appendingPathComponent("snapshot")
-        let outputFD = Darwin.open(destination.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
-        guard outputFD >= 0 else { throw AskBaseError.importFailed("无法创建导入暂存文件。") }
-        let output = FileHandle(fileDescriptor: outputFD, closeOnDealloc: true)
-        defer { try? output.close() }
-        var hasher = SHA256()
-        var byteCount = 0
-        do {
-            while let part = try handle.read(upToCount: 1_048_576), !part.isEmpty {
-                try Task.checkCancellation()
-                try output.write(contentsOf: part)
-                hasher.update(data: part)
-                byteCount += part.count
-            }
-            try output.synchronize()
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch let error as AskBaseError { throw error }
-        catch { throw AskBaseError.importFailed("读取文件失败：\(error.localizedDescription)") }
-        var after = stat()
-        guard fstat(descriptor, &after) == 0, before.st_size == after.st_size,
-              after.st_size == byteCount,
-              before.st_mtimespec.tv_sec == after.st_mtimespec.tv_sec,
-              before.st_mtimespec.tv_nsec == after.st_mtimespec.tv_nsec,
-              before.st_ctimespec.tv_sec == after.st_ctimespec.tv_sec,
-              before.st_ctimespec.tv_nsec == after.st_ctimespec.tv_nsec else {
-            throw AskBaseError.importFailed("读取期间文件发生变化，请保存文件后重新导入。")
-        }
-        try Task.checkCancellation()
-        completed = true
-        return InputSnapshot(directory: directory, url: destination,
-                             contentHash: hasher.finalize().map { String(format: "%02x", $0) }.joined(),
-                             byteCount: byteCount)
-    }
 }
 
 /// File operations use an opened, non-symlink directory and single-component

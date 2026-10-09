@@ -1,0 +1,15 @@
+{
+  "version": "0.3.1",
+  "build": "5",
+  "bundle_id": "cloud.doublewen.AskBaseMac",
+  "filename": "AskBase-Local-0.3.1-macOS-arm64.zip",
+  "size_bytes": 2114332,
+  "sha256": "1ab7b33c62353ae2803174ca46c7dc4aba8bac49a5d203d46665ef462d11b14d",
+  "architecture": "arm64",
+  "ad_hoc_signature_verified": true,
+  "bundled_licenses_match": {
+    "LICENSE": true,
+    "NOTICE": true,
+    "THIRD_PARTY_NOTICES.md": true
+  }
+}

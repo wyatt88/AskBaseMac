@@ -1,0 +1,76 @@
+{
+  "version": "0.3.1",
+  "scope": "Offline core regressions using synthetic files and isolated libraries; no actual cloud-provider download acceptance.",
+  "suites": [
+    {
+      "suite": "CloudImportRegressionTests",
+      "tests": 22,
+      "failures": 0
+    },
+    {
+      "suite": "DocumentFormatTests",
+      "tests": 21,
+      "failures": 0
+    },
+    {
+      "suite": "EngineTests",
+      "tests": 8,
+      "failures": 0
+    },
+    {
+      "suite": "ImportRegressionTests",
+      "tests": 13,
+      "failures": 0
+    },
+    {
+      "suite": "ImporterTests",
+      "tests": 19,
+      "failures": 0
+    },
+    {
+      "suite": "IndependentMediaLifecycleTests",
+      "tests": 7,
+      "failures": 0
+    },
+    {
+      "suite": "MediaClientTests",
+      "tests": 5,
+      "failures": 0
+    },
+    {
+      "suite": "MediaProcessorTests",
+      "tests": 21,
+      "failures": 0
+    },
+    {
+      "suite": "ModelClientTests",
+      "tests": 9,
+      "failures": 0
+    },
+    {
+      "suite": "MultimodalCoreTests",
+      "tests": 7,
+      "failures": 0
+    },
+    {
+      "suite": "StorageTests",
+      "tests": 21,
+      "failures": 0
+    },
+    {
+      "suite": "AskBaseCoreTests.xctest",
+      "tests": 153,
+      "failures": 0
+    },
+    {
+      "suite": "All tests",
+      "tests": 153,
+      "failures": 0
+    }
+  ],
+  "source_sha256": {
+    "Sources/AskBaseCore/FileSnapshotReader.swift": "1a13ba5828c4522c472f3a1994e042153a3eeddbadad45d4846d5d9c97dd22df",
+    "Sources/AskBaseCore/DocumentImporter.swift": "70e10396918f52053e1d7a2761a4bd660b90fcf95c3e9ed4b698c4585d84c896",
+    "Tests/AskBaseCoreTests/CloudImportRegressionTests.swift": "d912980d7b19f64cb505801a27e50de01ed7ab93fdef10fad6b58f5a0a0d56e2"
+  }
+}

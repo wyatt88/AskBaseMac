@@ -49,6 +49,12 @@
 
 文件夹导入跳过隐藏项、应用包和符号链接。可以在选择面板中直接选中隐藏文件导入。处理过程中可停止，已完成的资料保留，未完成的索引可重试。
 
+### iCloud Drive、OneDrive 等云盘文件
+
+0.3.1 在读取文件前通过 macOS 协调访问，等待支持 File Provider 的云盘准备本地内容，再保存到应用自己的资料副本中。后续解析和索引使用同一份副本；云盘属性更新不会再被直接误判为正文改变。若读取期间文件确实改写或替换，会自动重新读取，最多尝试三次；等待下载期间可以停止导入。
+
+云盘客户端需要正常登录并能取得文件。若下载或同步失败，可以在 Finder 中右键文件，选择 iCloud 的“立即下载”或 OneDrive 的“始终保留在此设备上”，等下载完成后再次导入。没有重新加入原文件大小或数量限制，已有成功导入的资料无需重建索引。
+
 ### 图片、语音与视频
 
 0.3.0 启用 EmbeddingGemma 2 已有的视觉和音频组件，使用同一个共享向量空间。资料导入后，可输入“讨论交付日期的录音”“红色圆形图片”等描述检索，也可以点击“用媒体搜索…”选择图片、录音或视频。查询文件只用于本次搜索，不会自动加入资料库。
@@ -73,7 +79,7 @@ python3 scripts/build_app.py --install
 open "$HOME/Applications/AskBase Local.app"
 ```
 
-构建脚本生成真正的 `.app`，安装到 `~/Applications`，并生成 `dist/AskBase-Local-0.3.0-macOS-arm64.zip`。构建副本保存在 `dist/build-products.noindex/`，避免与安装版同时出现在系统应用搜索中；许可文件随应用打包。应用使用本地临时签名，尚未做 Apple 开发者签名、公证或 App Store 发布。其他 Mac 下载预编译版本时可能需要在系统设置中允许打开；也可以直接从源码构建。
+构建脚本生成真正的 `.app`，安装到 `~/Applications`，并生成 `dist/AskBase-Local-0.3.1-macOS-arm64.zip`。构建副本保存在 `dist/build-products.noindex/`，避免与安装版同时出现在系统应用搜索中；许可文件随应用打包。应用使用本地临时签名，尚未做 Apple 开发者签名、公证或 App Store 发布。其他 Mac 下载预编译版本时可能需要在系统设置中允许打开；也可以直接从源码构建。
 
 ### EmbeddingGemma 2
 
@@ -153,6 +159,7 @@ python3 scripts/verify_import_formats.py
 - [0.2.0 导入更新与验收](docs/IMPORT-UPDATE-0.2.0.md)
 - [0.3.0 多模态更新与验收](docs/MULTIMODAL-UPDATE-0.3.0.md)
 - [0.3.0 多模态验收协议](docs/MULTIMODAL-PROTOCOL-0.3.0.md)
+- [0.3.1 云盘导入修复](docs/CLOUD-IMPORT-FIX-0.3.1.md)
 - [实现契约](docs/IMPLEMENTATION-CONTRACT.md)
 - [独立审查](docs/REVIEW.md)
 - [第三方组件](THIRD_PARTY_NOTICES.md)

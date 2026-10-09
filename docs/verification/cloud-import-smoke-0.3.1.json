@@ -1,0 +1,21 @@
+{
+  "answer" : "",
+  "checks" : {
+    "database_reopened" : true,
+    "deleted_source_not_retrieved" : true,
+    "duplicate_skipped" : true,
+    "embedding_ready" : true,
+    "knowledge_base_delete_cascades" : true,
+    "nonempty_ready_chunks" : true,
+    "note_persisted" : true,
+    "reindex_succeeded" : true,
+    "relevant_source_ranked_first" : true,
+    "stable_source_id" : true,
+    "three_documents_indexed" : true
+  },
+  "model" : "not_run",
+  "passed" : 11,
+  "seconds" : 0.23052501678466797,
+  "test_data" : "synthetic; isolated temporary library; removed on exit",
+  "total" : 11
+}

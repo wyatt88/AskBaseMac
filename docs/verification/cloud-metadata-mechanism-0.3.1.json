@@ -1,0 +1,9 @@
+{
+  "fixture": "synthetic local file; xattr change during read",
+  "content_hash_matches": true,
+  "size_unchanged": true,
+  "mtime_unchanged": true,
+  "ctime_changed": true,
+  "old_timestamp_rule_would_reject": true,
+  "scope": "Filesystem mechanism replay, not an actual iCloud/OneDrive download."
+}

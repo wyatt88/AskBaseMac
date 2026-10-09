@@ -56,8 +56,14 @@ There are no fixed file byte, extracted text, PDF page, batch count, traversal c
 directory depth, or extension quotas. Explicitly selected hidden files are accepted;
 folder imports skip hidden descendants, file packages, and symlinks.
 Use a private disk snapshot, incremental SHA256, and streamed managed-original copy so
-the parser, digest, and stored original refer to exactly the same bytes. Reject changed
-inputs, pipes, devices, unreadable content, and undecodable formats explicitly.
+the parser, digest, and stored original refer to exactly the same bytes. Coordinate
+content access with NSFileCoordinator before opening iCloud / File Provider files;
+asynchronous import and media-query waits must propagate task cancellation to the
+coordinator and copy loop. ctime-only metadata changes are not content changes:
+when timestamps change, validate a second full source hash against the snapshot.
+Reacquire an atomically replaced file or inconsistent revision, at most three
+attempts with bounded cancellable backoff. Reject persistent content changes,
+pipes, devices, unreadable content, and undecodable formats explicitly.
 Text chunking uses grapheme-safe String indices without a whole-document Character array.
 Reject scanned PDFs with a clear OCR message. Media OCR is independent and does not
 imply automatic scanned-PDF OCR.
