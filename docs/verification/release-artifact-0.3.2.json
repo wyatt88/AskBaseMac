@@ -1,0 +1,13 @@
+{
+  "version": "0.3.2",
+  "build": "6",
+  "architecture": "arm64",
+  "archive": "dist/AskBase-Local-0.3.2-macOS-arm64.zip",
+  "size_bytes": 2125251,
+  "sha256": "2c55172bff89e9417b76f201305705e4fecffe57a8a0a17b5f90494bebe08a37",
+  "signature": "ad-hoc strict verification passed",
+  "notarized": false,
+  "embedded_notices_match_source": true,
+  "ui_check": "79/79; docs/verification/chat-composer-0.3.2.json",
+  "binary_sha256": "109ae476b8a2ceeaf1f29f4a93a60b55e0fcd8b33a8c9b62bcdf82a54f64106d"
+}

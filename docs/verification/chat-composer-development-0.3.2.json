@@ -1,0 +1,36 @@
+{
+  "historical_failed_runs": [
+    {
+      "run_id": "w01mxz9d",
+      "passed": 77,
+      "total": 79,
+      "failed_checks": [
+        "original_text_and_selection_restored",
+        "swiftui_update_preserves_active_composition"
+      ],
+      "source_sha256": {
+        "Sources/AskBaseMac/ChatComposer.swift": "dcb32e9338638db15cdfc70d86502b051728d13869ef6567a6f7ef7ed714a45c",
+        "Sources/AskBaseMac/ChatView.swift": "dfe423bf727ecd8f800f8008f563772c9015aaa789d515605fad17245faf169b",
+        "Sources/AskBaseMac/AppSmokeVerifier.swift": "bb771c2f9de01074e1792bc8edb589700e2c83023093a32d552ba7298f3b3a37",
+        "Sources/AskBaseMac/ComposerUIVerifier.swift": "881d36935d493a9fa66f52dfb607c367ffaeea3798bd9b19b66a03af12debdc1"
+      }
+    },
+    {
+      "run_id": "w0lviciy",
+      "passed": 78,
+      "total": 79,
+      "failed_checks": [
+        "external_draft_replacement_discards_old_composition"
+      ],
+      "source_sha256": {
+        "Sources/AskBaseMac/ChatComposer.swift": "5b12738aa2fc0b3c355db82b2fdbd9c0ac97bf0b6830ee3330f98264e0b26d76",
+        "Sources/AskBaseMac/ChatView.swift": "dfe423bf727ecd8f800f8008f563772c9015aaa789d515605fad17245faf169b",
+        "Sources/AskBaseMac/AppSmokeVerifier.swift": "ee18b4b8c20ba7560ed2422b8b1919fa6ec03e7e77e981ed0c955117d031e86c",
+        "Sources/AskBaseMac/ComposerUIVerifier.swift": "474cb3b2b54d7d751f4a96b87e77dd0891905ce36f7cb423cb687717d588e2da"
+      }
+    }
+  ],
+  "final_passed": 79,
+  "final_total": 79,
+  "final_report": "chat-composer-0.3.2.json"
+}

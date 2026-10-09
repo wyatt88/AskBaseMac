@@ -3,7 +3,7 @@ import AskBaseCore
 
 struct ChatView: View {
     @EnvironmentObject private var state: AppState
-    @FocusState private var composerFocused: Bool
+    @State private var composerFocused = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -192,22 +192,12 @@ struct ChatView: View {
             .padding(.top, 4)
 
             VStack(spacing: 8) {
-                ZStack(alignment: .topLeading) {
-                    if state.chatDraft.isEmpty {
-                        Text("向当前知识库提问…")
-                            .font(.body).foregroundStyle(.tertiary)
-                            .padding(.horizontal, 5).padding(.vertical, 8)
-                            .allowsHitTesting(false)
-                    }
-                    TextEditor(text: $state.chatDraft)
-                        .font(.body).scrollContentBackground(.hidden)
-                        .focused($composerFocused)
-                        .frame(minHeight: 65, maxHeight: 104)
-                        .accessibilityLabel("向当前知识库提问")
-                        .accessibilityIdentifier("chatQuestion")
+                ChatComposer(text: $state.chatDraft, focused: $composerFocused, canSubmit: state.canAsk) {
+                    state.ask()
                 }
+                .frame(minHeight: 65, maxHeight: 104)
                 HStack {
-                    Text("⌘ ↩ 发送 · 回答请结合原文核对")
+                    Text("↩ 发送 · ⇧ ↩ 换行 · 回答请结合原文核对")
                         .font(.caption).foregroundStyle(.tertiary)
                     Spacer()
                     if state.isAnswering {
@@ -219,7 +209,6 @@ struct ChatView: View {
                             Label("发送", systemImage: "arrow.up")
                         }
                         .buttonStyle(.borderedProminent)
-                        .keyboardShortcut(.return, modifiers: .command)
                         .disabled(!state.canAsk)
                         .accessibilityIdentifier("chatSend")
                     }

@@ -26,6 +26,10 @@ enum AppSmokeVerifier {
             }
             try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
             checks["startup_ready"] = state.hasStarted && state.startupError == nil
+            if args.contains("--ui-composer-only") {
+                try await verifyComposer(state: state, output: output, checks: &checks)
+                await finishVerification(state: state, succeeded: checks.values.allSatisfy { $0 })
+            }
             checks["embedding_connected"] = state.modelStatus?.embeddingAvailable == true
             checks["local_answer_model_selected"] = !state.settings.chatModel.isEmpty
             NSApp.windows.first(where: { $0.isVisible && $0.title == "AskBase Local" })?
@@ -141,6 +145,87 @@ enum AppSmokeVerifier {
             }
         }
         await finishVerification(state: state, succeeded: succeeded)
+    }
+
+    private static func verifyComposer(state: AppState, output: URL, checks: inout [String: Bool]) async throws {
+        try await wait(until: {
+            NSApp.windows.contains(where: { $0.isVisible && $0.title == "AskBase Local" })
+        }, timeout: 10)
+        guard let window = NSApp.windows.first(where: { $0.isVisible && $0.title == "AskBase Local" }) else {
+            throw AskBaseError.storage("Expected composer verification window.")
+        }
+        window.setContentSize(NSSize(width: 1240, height: 820))
+        state.section = .chat
+        try await settle()
+        for (key, value) in try await ComposerUIVerifier.run(in: window) { checks[key] = value }
+        func findEditor(_ view: NSView) -> ChatComposerTextView? {
+            if let editor = view as? ChatComposerTextView { return editor }
+            return view.subviews.lazy.compactMap { findEditor($0) }.first
+        }
+        guard let editor = window.contentView.flatMap({ findEditor($0) }) else {
+            throw AskBaseError.storage("Chat composer did not mount.")
+        }
+        window.makeFirstResponder(editor)
+        state.chatDraft = "初始"
+        try await settle()
+        editor.setSelectedRange(NSRange(location: 2, length: 0))
+        editor.insertText("中文", replacementRange: NSRange(location: NSNotFound, length: 0))
+        editor.breakUndoCoalescing()
+        try await settle()
+        checks["typing_updates_binding_without_moving_cursor"] = state.chatDraft == "初始中文"
+            && editor.string == state.chatDraft && editor.selectedRange() == NSRange(location: 4, length: 0)
+        let canUndo = editor.undoManager?.canUndo == true
+        if canUndo { editor.undoManager?.undo() }
+        try await settle()
+        checks["undo_survives_swiftui_update"] = canUndo && state.chatDraft == "初始" && editor.string == state.chatDraft
+        let canRedo = editor.undoManager?.canRedo == true
+        if canRedo { editor.undoManager?.redo() }
+        try await settle()
+        checks["redo_survives_swiftui_update"] = canRedo && state.chatDraft == "初始中文" && editor.string == state.chatDraft
+        editor.setSelectedRange(NSRange(location: 1, length: 2))
+        state.notice = "合成输入框检查"
+        try await settle()
+        checks["unrelated_state_update_preserves_selection"] = editor.selectedRange() == NSRange(location: 1, length: 2)
+        state.notice = nil
+        editor.setSelectedRange(NSRange(location: 4, length: 0))
+        editor.setMarkedText("候选", selectedRange: NSRange(location: 2, length: 0),
+                             replacementRange: NSRange(location: NSNotFound, length: 0))
+        state.notice = "合成预编辑检查"
+        try await settle()
+        checks["swiftui_update_preserves_active_composition"] = editor.hasMarkedText()
+            && editor.string == "初始中文候选"
+        state.notice = nil
+        state.chatDraft = "另一个草稿"
+        try await settle()
+        checks["external_draft_replacement_discards_old_composition"] = !editor.hasMarkedText()
+            && editor.string == state.chatDraft && state.chatDraft == "另一个草稿"
+        checks["empty_library_cannot_submit"] = !state.canAsk && !editor.canSubmit
+        state.chatDraft = ""
+        try await settle()
+        window.makeFirstResponder(editor)
+        NSApp.appearance = NSAppearance(named: .darkAqua)
+        try await settle()
+        try capture("01-composer-empty-dark", to: output)
+        state.chatDraft = "如何配置本地知识库？\n请按步骤说明。"
+        try await settle()
+        checks["binding_updates_native_text"] = editor.string == state.chatDraft
+        try capture("02-composer-multiline-dark", to: output)
+        state.chatDraft = ""
+        NSApp.appearance = NSAppearance(named: .aqua)
+        window.setContentSize(NSSize(width: 1100, height: 740))
+        try await settle()
+        checks["cleared_draft_resets_insertion_point"] = editor.string.isEmpty && editor.selectedRange().location == 0
+        try capture("03-composer-empty-light-minimum", to: output)
+        let report: [String: Any] = [
+            "checks": checks, "passed": checks.values.filter { $0 }.count, "total": checks.count,
+            "capture_method": "AppKit cacheDisplay of the actual app-owned ChatView window",
+            "input_method": "NSEvent dispatch and marked-text composition on the mounted NSTextView; submit callback intercepted",
+            "library_isolation": "fresh explicitly selected AskBase-UIVerify-*/ui-smoke-library",
+            "generation_requests": 0,
+            "limits": "No external keyboard automation, physical Chinese candidate-window selection, or macOS 14 hardware check.",
+        ]
+        try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+            .write(to: output.appendingPathComponent("composer-verification.json"))
     }
 
     private static func verifyNativeMedia(
