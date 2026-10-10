@@ -12,6 +12,8 @@ public actor KnowledgeEngine {
     private var importingBases: Set<String> = []
     private var reindexingDocuments: Set<String> = []
     private var answeringConversations: Set<String> = []
+    private var taggingDocuments: Set<String> = []
+    private var tagVectorCache: [String: [Float]] = [:]
 
     public init(root: URL = KnowledgeEngine.defaultRoot, embeddingClient: (any EmbeddingProviding)? = nil,
                 chatClient: (any ChatProviding)? = nil) throws {
@@ -147,6 +149,16 @@ public actor KnowledgeEngine {
                     throw AskBaseError.importFailed("资料已被删除，已取消索引写入。")
                 }
                 try store.replaceChunks(documentID: prepared.document.id, chunks: chunks)
+                // Indexing is already committed. Optional enrichment must never
+                // turn a successfully imported document into a failed one.
+                pending = nil
+                if configuration.autoTagOnImport {
+                    do { _ = try await autoTag(documentID: prepared.document.id) }
+                    catch {
+                        if Task.isCancelled { throw CancellationError() }
+                        report.taggingWarnings.append("\(url.lastPathComponent)：\(error.localizedDescription)")
+                    }
+                }
                 if let complete = try store.document(id: prepared.document.id) { report.imported.append(complete) }
             } catch {
                 if let pending, var document = try store.document(id: pending.id) {
@@ -376,6 +388,69 @@ public actor KnowledgeEngine {
     }
     public func documentChunks(documentID: String) throws -> [DocumentChunk] {
         try store.documentChunks(documentID: documentID)
+    }
+
+    /// Fill only an untagged, ready document. Reuses stored content vectors and
+    /// the current embedding service; no chat model, downloads, or remote calls.
+    @discardableResult
+    public func autoTag(documentID: String) async throws -> [String] {
+        try Task.checkCancellation()
+        guard let document = try store.document(id: documentID) else {
+            throw AskBaseError.invalidInput("资料已不存在。")
+        }
+        guard document.tags.isEmpty else { return [] }
+        guard document.status == .ready, !reindexingDocuments.contains(documentID) else {
+            throw AskBaseError.invalidInput("资料索引完成后才能匹配标签。")
+        }
+        guard taggingDocuments.insert(documentID).inserted else { return [] }
+        defer { taggingDocuments.remove(documentID) }
+        let configuration = try store.settings()
+        let client = embedder(configuration)
+        let chunks = try store.documentChunks(documentID: documentID)
+        guard !chunks.isEmpty, chunks.allSatisfy({ validEmbedding($0.embedding) }) else {
+            throw AskBaseError.incompatibleIndex("资料没有有效向量，请先重新索引。")
+        }
+        let health = try await client.health()
+        try Task.checkCancellation()
+        try validateSpace(chunks: chunks, signature: health.encoderSignature, health: health)
+        let frequencies = try store.snapshot().documents
+            .filter { $0.knowledgeBaseID == document.knowledgeBaseID }
+            .flatMap(\.tags).reduce(into: [String: Int]()) { $0[$1, default: 0] += 1 }
+        let existing = frequencies.keys.sorted {
+            frequencies[$0] == frequencies[$1] ? $0 < $1 : frequencies[$0]! > frequencies[$1]!
+        }
+        let candidates = AutoTagging.candidates(existingTags: existing)
+        let keys = candidates.map {
+            "\(configuration.embeddingBaseURL)\u{0}\(health.encoderSignature)\u{0}\($0.prompt)"
+        }
+        if tagVectorCache.count + keys.filter({ tagVectorCache[$0] == nil }).count > 256 {
+            tagVectorCache.removeAll()
+        }
+        var vectors = keys.map { tagVectorCache[$0] }
+        let missing = vectors.indices.filter { vectors[$0] == nil }
+        for start in stride(from: 0, to: missing.count, by: 8) {
+            try Task.checkCancellation()
+            guard let current = try store.document(id: documentID),
+                  current.tags.isEmpty, current.updatedAt == document.updatedAt,
+                  !reindexingDocuments.contains(documentID) else { return [] }
+            let indices = Array(missing[start..<min(start + 8, missing.count)])
+            let response = try await client.embed(indices.map { candidates[$0].prompt }, inputType: "query")
+            guard response.signature == health.encoderSignature,
+                  response.vectors.count == indices.count,
+                  response.vectors.allSatisfy({ validEmbedding($0) }) else {
+                throw AskBaseError.incompatibleIndex("标签匹配期间编码模型发生变化或返回无效向量，请重试。")
+            }
+            for (index, vector) in zip(indices, response.vectors) {
+                vectors[index] = vector
+                tagVectorCache[keys[index]] = vector
+            }
+        }
+        try Task.checkCancellation()
+        guard !reindexingDocuments.contains(documentID) else { return [] }
+        let tags = AutoTagging.select(candidates: candidates, vectors: vectors.compactMap { $0 },
+                                      chunks: chunks, title: document.title)
+        return try store.applyAutomaticTags(documentID: documentID, expectedUpdatedAt: document.updatedAt,
+                                             tags: tags) ? tags : []
     }
     public func saveNote(_ note: LibraryNote) throws {
         try requireBase(note.knowledgeBaseID)

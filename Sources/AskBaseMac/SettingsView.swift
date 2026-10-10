@@ -39,6 +39,12 @@ struct SettingsView: View {
                     if state.settingsAreLocked {
                         Label("任务正在使用模型，完成或停止后可修改设置。", systemImage: "clock")
                             .font(.callout).foregroundStyle(.secondary)
+                        if state.taggingActivity != nil {
+                            Button(state.isCancellingTagging ? "正在停止主题标签匹配…" : "停止主题标签匹配") {
+                                state.cancelTagging()
+                            }
+                            .disabled(state.isCancellingTagging)
+                        }
                     }
                     if let error { ErrorPanel(title: "设置未能保存", message: error) }
                     if let error = state.modelSelectionError {
@@ -51,6 +57,7 @@ struct SettingsView: View {
                     embeddingSettings
                     chatSettings
                     retrievalSettings
+                    taggingSettings
                     storageSettings
                     if let checked = state.connectionCheckedAt, endpointsMatch {
                         Text("最近检测：\(checked.formatted(date: .abbreviated, time: .standard))")
@@ -177,6 +184,22 @@ struct SettingsView: View {
                 }
                 Text("模型接口仅接受 localhost、127.0.0.1 或 ::1。")
                     .font(.caption).foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    private var taggingSettings: some View {
+        settingsGroup("资料标签", symbol: "tag") {
+            VStack(alignment: .leading, spacing: 12) {
+                Toggle("导入后自动匹配主题标签", isOn: $draft.autoTagOnImport)
+                    .disabled(isBusy || state.settingsAreLocked)
+                    .accessibilityIdentifier("autoTagOnImport")
+                Text("复用本机已安装的 EmbeddingGemma 2，匹配主题标签，无需额外下载模型。仅处理空标签资料；未找到合适标签时可留空，已有标签保持不变。")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("可在资料详情中手动匹配或编辑标签，也可在资料库补全无标签资料。匹配失败不影响资料检索。")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

@@ -122,13 +122,17 @@ struct ImportStatusBar: View {
                 Text("正在读取拖入的文件地址…").font(.callout)
                 Spacer()
             } else if let outcome = state.importOutcome {
-                Image(systemName: outcome.error != nil || !outcome.report.failures.isEmpty
+                Image(systemName: outcome.error != nil || !outcome.report.failures.isEmpty || !outcome.report.taggingWarnings.isEmpty
                       ? "exclamationmark.circle" : "checkmark.circle")
-                    .foregroundStyle(outcome.error != nil || !outcome.report.failures.isEmpty
+                    .foregroundStyle(outcome.error != nil || !outcome.report.failures.isEmpty || !outcome.report.taggingWarnings.isEmpty
                                      ? Color.orange : AppPalette.accent)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(outcome.title).font(.callout.weight(.medium))
                     Text(outcome.summary).font(.caption).foregroundStyle(.secondary)
+                    if !outcome.report.taggingWarnings.isEmpty {
+                        Text("\(outcome.report.taggingWarnings.count) 项标签提示 · 不影响资料检索")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
                 }
                 Spacer()
                 Button("查看详情") { state.sheet = .importReport }.controlSize(.small)
@@ -173,6 +177,13 @@ struct ImportReportSheet: View {
                         }
                         reportSection("需处理", symbol: "exclamationmark.circle", color: .orange,
                                       items: outcome.report.failures)
+                        if !outcome.report.taggingWarnings.isEmpty {
+                            Text("以下资料的自动标签未完成，已索引资料仍可检索。可到资料详情重试匹配或手动编辑标签。")
+                                .font(.callout).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            reportSection("自动标签提示", symbol: "tag", color: .orange,
+                                          items: outcome.report.taggingWarnings)
+                        }
                         reportSection("已跳过", symbol: "arrow.turn.down.right", color: .secondary,
                                       items: outcome.report.skipped)
                         reportSection("已索引", symbol: "checkmark.circle", color: AppPalette.accent,
@@ -185,9 +196,10 @@ struct ImportReportSheet: View {
                 }
                 .background(AppPalette.surface, in: RoundedRectangle(cornerRadius: 10))
                 HStack {
-                    CopyTextButton(text: outcome.plainText)
+                    CopyTextButton(text: outcome.plainText + (outcome.report.taggingWarnings.isEmpty ? ""
+                        : "\n\n自动标签提示（不影响资料检索）：\n" + outcome.report.taggingWarnings.joined(separator: "\n")))
                     Spacer()
-                    if !outcome.report.failures.isEmpty {
+                    if !outcome.report.failures.isEmpty || !outcome.report.taggingWarnings.isEmpty {
                         Button("前往资料库") {
                             state.section = .library
                             dismiss()

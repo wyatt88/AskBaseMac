@@ -1,0 +1,20 @@
+{
+  "capture_method" : "AppKit cacheDisplay of actual app-owned window",
+  "checks" : {
+    "batch_completes_two_documents" : true,
+    "batch_locks_settings" : true,
+    "cleared_document_can_match_again" : true,
+    "disabled_import_keeps_tags_empty" : true,
+    "enabled_import_assigns_tags" : true,
+    "existing_tags_are_not_requeued" : true,
+    "import_preference_saved" : true,
+    "single_document_rematches" : true,
+    "startup_ready" : true,
+    "tag_filter_selects_matching_document" : true,
+    "tags_available_in_filter" : true
+  },
+  "input_method" : "native AppState actions in isolated synthetic library",
+  "limits" : "No external mouse automation, real user library, or media tagging accuracy acceptance.",
+  "passed" : 11,
+  "total" : 11
+}

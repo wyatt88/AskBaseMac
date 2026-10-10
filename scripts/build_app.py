@@ -47,8 +47,8 @@ def main():
         "CFBundleDisplayName": "AskBase Local",
         "CFBundleExecutable": "AskBaseMac",
         "CFBundlePackageType": "APPL",
-        "CFBundleShortVersionString": "0.3.2",
-        "CFBundleVersion": "6",
+        "CFBundleShortVersionString": "0.4.0",
+        "CFBundleVersion": "7",
         "CFBundleIconFile": "AppIcon",
         "LSMinimumSystemVersion": "14.0",
         "NSHighResolutionCapable": True,
@@ -59,7 +59,7 @@ def main():
     (bundle / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
     subprocess.run(["codesign", "--force", "--sign", "-", str(bundle)], check=True)
     subprocess.run(["codesign", "--verify", "--deep", "--strict", str(bundle)], check=True)
-    archive = distribution / "AskBase-Local-0.3.2-macOS-arm64.zip"
+    archive = distribution / "AskBase-Local-0.4.0-macOS-arm64.zip"
     if archive.exists():
         archive.unlink()
     subprocess.run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(bundle), str(archive)], check=True)

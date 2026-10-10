@@ -126,7 +126,8 @@ final class MultimodalCoreTests: XCTestCase {
         let afterQuery = try await engine.snapshot()
         XCTAssertEqual(afterQuery.documents.count, 1, "Querying must not import the query file")
         let inputs = await embedder.inputs()
-        XCTAssertEqual(inputs, ["red"], "Media placeholders must never be sent to the text encoder")
+        XCTAssertEqual(inputs, AutoTagging.catalog.map(\.prompt) + ["red"],
+                       "Only topic-label queries and the user query may reach the text encoder, never media placeholders")
         let original = try await engine.originalURL(documentID: document.id)
         try await engine.deleteDocument(id: document.id)
         XCTAssertFalse(FileManager.default.fileExists(atPath: original.path))

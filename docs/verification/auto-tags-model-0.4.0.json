@@ -1,0 +1,50 @@
+{
+  "scope": "10 synthetic text cases; no real-corpus or media-quality acceptance",
+  "encoder_signature": "0ea16f19627ece8078d464d0efc776527b40babba613412285f58080db0d1cce",
+  "model": "embeddinggemma-2",
+  "model_revision": "914f7f89142e33e77833254d9c9b90c3cef7303b",
+  "elapsed_seconds": 1.62,
+  "checks": {
+    "all_indexed": true,
+    "no_tagging_errors": true,
+    "集群调度": true,
+    "内核追踪": true,
+    "温室栽培": true,
+    "资产配置": true,
+    "晚餐准备": true,
+    "界面代码": true,
+    "资料问答": true,
+    "旋律练习": true,
+    "无意义字串": true,
+    "待补内容": true
+  },
+  "tags": {
+    "内核追踪": [
+      "eBPF"
+    ],
+    "待补内容": [],
+    "旋律练习": [
+      "音乐"
+    ],
+    "无意义字串": [],
+    "晚餐准备": [
+      "烹饪美食"
+    ],
+    "温室栽培": [
+      "农业园艺"
+    ],
+    "界面代码": [
+      "Swift"
+    ],
+    "资产配置": [
+      "金融投资"
+    ],
+    "资料问答": [
+      "RAG"
+    ],
+    "集群调度": [
+      "Amazon EKS",
+      "Kubernetes"
+    ]
+  }
+}

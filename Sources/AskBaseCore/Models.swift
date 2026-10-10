@@ -145,11 +145,24 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var ollamaBaseURL: String
     public var chatModel: String
     public var topK: Int
+    public var autoTagOnImport: Bool
     public init(embeddingBaseURL: String = "http://127.0.0.1:8871",
                 ollamaBaseURL: String = "http://127.0.0.1:11434",
-                chatModel: String = "", topK: Int = 6) {
+                chatModel: String = "", topK: Int = 6, autoTagOnImport: Bool = true) {
         self.embeddingBaseURL = embeddingBaseURL; self.ollamaBaseURL = ollamaBaseURL
         self.chatModel = chatModel; self.topK = topK
+        self.autoTagOnImport = autoTagOnImport
+    }
+    enum CodingKeys: String, CodingKey {
+        case embeddingBaseURL, ollamaBaseURL, chatModel, topK, autoTagOnImport
+    }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        embeddingBaseURL = try values.decode(String.self, forKey: .embeddingBaseURL)
+        ollamaBaseURL = try values.decode(String.self, forKey: .ollamaBaseURL)
+        chatModel = try values.decode(String.self, forKey: .chatModel)
+        topK = try values.decode(Int.self, forKey: .topK)
+        autoTagOnImport = try values.decodeIfPresent(Bool.self, forKey: .autoTagOnImport) ?? true
     }
 }
 
@@ -173,6 +186,7 @@ public struct ImportReport: Sendable {
     public var imported: [LibraryDocument] = []
     public var skipped: [String] = []
     public var failures: [String] = []
+    public var taggingWarnings: [String] = []
     public init() {}
     public var summary: String {
         "已索引 \(imported.count) 份 · 已跳过 \(skipped.count) 份 · 需处理 \(failures.count) 份"

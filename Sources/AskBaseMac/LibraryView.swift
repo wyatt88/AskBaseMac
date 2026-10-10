@@ -9,19 +9,25 @@ struct LibraryView: View {
             PageHeader(title: "资料库", subtitle: subtitle) {
                 if !state.documents.isEmpty {
                     Menu {
+                        Button("为无标签资料补全标签（\(state.untaggedReadyDocuments.count) 份）") {
+                            state.completeMissingTags()
+                        }
+                        .disabled(!state.canCompleteTags)
+                        .help("仅处理当前知识库中可检索且没有标签的资料，按顺序匹配主题")
+                        Divider()
                         Button("重建全部索引（\(state.documents.count) 份）") {
                             state.reindexDocuments(state.documents)
-                        }
+                        }.disabled(!state.canReindex)
                         let failed = state.documents.filter { $0.status == .failed }
                         Button("重试失败资料（\(failed.count) 份）") {
                             state.reindexDocuments(failed)
-                        }.disabled(failed.isEmpty)
+                        }.disabled(failed.isEmpty || !state.canReindex)
                     } label: {
-                        Label("重新索引", systemImage: "arrow.triangle.2.circlepath")
+                        Label("资料操作", systemImage: "ellipsis.circle")
                     }
                     .fixedSize()
-                    .disabled(state.importActivity != nil || state.reindexActivity != nil || state.isDeleting)
-                    .help("模型版本改变后，可按顺序重建本库的全部索引")
+                    .disabled(state.isDeleting || state.isPreparingToQuit)
+                    .help("补全本库标签，或在模型版本改变后重建索引")
                 }
                 Button { state.chooseImport() } label: {
                     Label(state.isChoosingFiles ? "选择中…" : "导入资料…", systemImage: "plus")
@@ -33,6 +39,7 @@ struct LibraryView: View {
             EmbeddingCapabilityNote(capabilities: state.embeddingCapabilities)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 28).padding(.bottom, 15)
+            taggingStatus
             if state.documents.isEmpty {
                 Divider()
                 EmptyState(symbol: "tray.and.arrow.down", title: "从第一份资料开始",
@@ -76,6 +83,50 @@ struct LibraryView: View {
         let base = state.selectedKnowledgeBase?.name ?? ""
         guard !state.documents.isEmpty else { return base }
         return "\(base) · \(state.documents.count) 份资料 · \(state.readyDocumentCount) 份可检索"
+    }
+
+    @ViewBuilder private var taggingStatus: some View {
+        if let activity = state.taggingActivity {
+            VStack(alignment: .leading, spacing: 9) {
+                HStack(spacing: 12) {
+                    ProgressView().controlSize(.small)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(state.isCancellingTagging ? "正在停止主题标签匹配…"
+                             : activity.currentTitle.isEmpty ? "正在准备主题标签匹配…" : "正在匹配「\(activity.currentTitle)」")
+                            .font(.callout.weight(.medium)).lineLimit(1).help(activity.currentTitle)
+                        Text("「\(activity.knowledgeBaseName)」 · 已处理 \(activity.processed) / \(activity.total) 份 · \(activity.succeeded) 份新增 · \(activity.failures.count) 份失败")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("停止") { state.cancelTagging() }
+                        .controlSize(.small).disabled(state.isCancellingTagging)
+                        .accessibilityIdentifier("cancelTagging")
+                }
+                ProgressView(value: Double(activity.processed), total: Double(activity.total))
+                Text("复用本机 EmbeddingGemma 2 匹配主题标签，无需额外下载模型。已有标签保持不变，可手动编辑。")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 28).padding(.bottom, 16)
+        } else if let outcome = state.taggingOutcome,
+                  outcome.activity.knowledgeBaseID == state.selectedKnowledgeBaseID {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 10) {
+                    Image(systemName: !outcome.activity.failures.isEmpty ? "exclamationmark.circle"
+                          : outcome.wasCancelled ? "stop.circle" : "checkmark.circle")
+                        .foregroundStyle(!outcome.activity.failures.isEmpty ? Color.orange : AppPalette.accent)
+                    Text(outcome.title).font(.callout.weight(.medium))
+                    Spacer()
+                    Button("查看详情") { state.showTaggingDetails() }.controlSize(.small)
+                    Button { state.dismissTaggingOutcome() } label: { Image(systemName: "xmark") }
+                        .buttonStyle(.plain).foregroundStyle(.secondary).help("收起标签匹配结果")
+                }
+                Text(outcome.summary).font(.caption).foregroundStyle(.secondary)
+                Text(outcome.explanation).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 28).padding(.bottom, 16)
+        }
     }
 
     private var filters: some View {
@@ -136,12 +187,12 @@ struct LibraryView: View {
                             .contextMenu {
                                 Button("打开原始文件") { state.openOriginal(document.id) }
                                 Button(document.isFavorite ? "取消收藏" : "收藏") { state.toggleFavorite(document) }
-                                    .disabled(state.changingDocumentIDs.contains(document.id))
+                                    .disabled(!state.canEditDocument(document.id))
                                 Button(document.status == .failed ? "重试索引" : "重建索引") { state.reindex(document) }
-                                    .disabled(document.status == .indexing || state.reindexActivity != nil || state.importActivity != nil)
+                                    .disabled(document.status == .indexing || !state.canReindex)
                                 Divider()
                                 Button("删除资料…", role: .destructive) { state.requestDelete(document) }
-                                    .disabled(document.status == .indexing || state.reindexingDocumentIDs.contains(document.id) || state.isDeleting)
+                                    .disabled(!state.canDeleteDocument(document))
                             }
                     }
                 }
@@ -176,7 +227,7 @@ struct DocumentRow: View {
                     }
                     .buttonStyle(.borderless)
                     .help(document.isFavorite ? "取消收藏" : "收藏")
-                    .disabled(state.changingDocumentIDs.contains(document.id))
+                    .disabled(!state.canEditDocument(document.id))
                 }
                 HStack(spacing: 6) {
                     Text(document.displayFileType)
@@ -200,7 +251,7 @@ struct DocumentRow: View {
                         Image(systemName: "arrow.triangle.2.circlepath").font(.caption)
                     }
                     .buttonStyle(.borderless)
-                    .disabled(document.status == .indexing || state.importActivity != nil || state.reindexActivity != nil)
+                    .disabled(document.status == .indexing || !state.canReindex)
                     .help(document.status == .failed ? "重试这份资料的索引" : "重新索引这份资料")
                 }
                 if !document.tags.isEmpty {

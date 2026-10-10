@@ -30,6 +30,10 @@ enum AppSmokeVerifier {
                 try await verifyComposer(state: state, output: output, checks: &checks)
                 await finishVerification(state: state, succeeded: checks.values.allSatisfy { $0 })
             }
+            if args.contains("--ui-tags-only") {
+                try await verifyAutoTags(state: state, output: output, checks: &checks)
+                await finishVerification(state: state, succeeded: checks.values.allSatisfy { $0 })
+            }
             checks["embedding_connected"] = state.modelStatus?.embeddingAvailable == true
             checks["local_answer_model_selected"] = !state.settings.chatModel.isEmpty
             NSApp.windows.first(where: { $0.isVisible && $0.title == "AskBase Local" })?
@@ -145,6 +149,99 @@ enum AppSmokeVerifier {
             }
         }
         await finishVerification(state: state, succeeded: succeeded)
+    }
+
+    private static func verifyAutoTags(state: AppState, output: URL, checks: inout [String: Bool]) async throws {
+        try await wait(until: {
+            NSApp.windows.contains(where: { $0.isVisible && $0.title == "AskBase Local" })
+        }, timeout: 10)
+        guard let window = NSApp.windows.first(where: { $0.isVisible && $0.title == "AskBase Local" }),
+              let base = state.selectedKnowledgeBase else {
+            throw AskBaseError.storage("Expected isolated tagging verification window.")
+        }
+        window.setContentSize(NSSize(width: 1240, height: 820))
+        let fixtures = output.appendingPathComponent("fixtures")
+        try FileManager.default.createDirectory(at: fixtures, withIntermediateDirectories: true)
+        let first = fixtures.appendingPathComponent("集群部署.txt")
+        let second = fixtures.appendingPathComponent("菜园管理.txt")
+        try "Kubernetes schedules pods on nodes. Amazon EKS manages Kubernetes control planes on AWS. Use kubectl to inspect deployments."
+            .write(to: first, atomically: true, encoding: .utf8)
+        try "园艺种植：菜园里的番茄需要充足阳光，定期浇水、施肥并保持土壤透气。果实成熟后及时采收。"
+            .write(to: second, atomically: true, encoding: .utf8)
+        var settings = state.settings
+        settings.autoTagOnImport = false
+        try await state.applySettings(settings, testConnections: false)
+        state.importDocuments([first, second], into: base)
+        try await wait(until: { state.importActivity == nil }, timeout: 150)
+        checks["disabled_import_keeps_tags_empty"] = state.documents.count == 2
+            && state.documents.allSatisfy { $0.status == .ready && $0.tags.isEmpty }
+        state.dismissImportOutcome()
+        state.section = .library
+        state.completeMissingTags()
+        checks["batch_locks_settings"] = state.taggingActivity != nil && state.settingsAreLocked
+        try await wait(until: { state.taggingActivity == nil }, timeout: 150)
+        checks["batch_completes_two_documents"] = state.taggingOutcome?.activity.succeeded == 2
+            && state.taggingOutcome?.activity.failures.isEmpty == true
+        checks["tags_available_in_filter"] = state.allTags.contains("Kubernetes")
+            && state.allTags.contains("农业园艺")
+        guard let document = state.documents.first(where: { $0.title == "集群部署" }) else {
+            throw AskBaseError.storage("Synthetic document missing.")
+        }
+        state.selectedDocumentID = document.id
+        NSApp.appearance = NSAppearance(named: .darkAqua)
+        try await settle()
+        try capture("01-auto-tags-library-dark", to: output)
+        state.tagFilter = "农业园艺"
+        checks["tag_filter_selects_matching_document"] = state.filteredDocuments.count == 1
+            && state.filteredDocuments.first?.title == "菜园管理"
+        state.tagFilter = ""
+        try await state.updateDocument(id: document.id, tags: ["手动保留"])
+        state.completeMissingTags()
+        checks["existing_tags_are_not_requeued"] = state.taggingActivity == nil
+            && state.documents.first(where: { $0.id == document.id })?.tags == ["手动保留"]
+        try await state.updateDocument(id: document.id, tags: [])
+        checks["cleared_document_can_match_again"] = state.canTagDocument(document.id)
+        state.matchTags(documentID: document.id)
+        try await wait(until: { state.taggingActivity == nil }, timeout: 150)
+        checks["single_document_rematches"] = state.documents.first(where: { $0.id == document.id })?
+            .tags.contains("Kubernetes") == true
+        settings.autoTagOnImport = true
+        try await state.applySettings(settings, testConnections: false)
+        checks["import_preference_saved"] = state.settings.autoTagOnImport
+        let third = fixtures.appendingPathComponent("Swift 笔记.txt")
+        try "Swift programming uses structs, protocols and async await. SwiftUI builds user interfaces with View, State and Binding."
+            .write(to: third, atomically: true, encoding: .utf8)
+        state.importDocuments([third], into: base)
+        try await wait(until: { state.importActivity == nil }, timeout: 150)
+        checks["enabled_import_assigns_tags"] = state.documents.first(where: { $0.title == "Swift 笔记" })?
+            .tags.contains("Swift") == true
+        state.dismissImportOutcome()
+        state.dismissTaggingOutcome()
+        state.section = .settings
+        NSApp.appearance = NSAppearance(named: .aqua)
+        window.setContentSize(NSSize(width: 1100, height: 740))
+        try await settle()
+        func scrollViews(_ view: NSView) -> [NSScrollView] {
+            (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrollViews($0) }
+        }
+        if let content = window.contentView,
+           let scroll = scrollViews(content).max(by: { $0.bounds.width < $1.bounds.width }),
+           let documentView = scroll.documentView {
+            let bottom = documentView.isFlipped
+                ? max(0, documentView.bounds.height - scroll.contentView.bounds.height) : 0
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: bottom))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            try await settle()
+        }
+        try capture("02-auto-tags-settings-light", to: output)
+        let report: [String: Any] = [
+            "checks": checks, "passed": checks.values.filter { $0 }.count, "total": checks.count,
+            "capture_method": "AppKit cacheDisplay of actual app-owned window",
+            "input_method": "native AppState actions in isolated synthetic library",
+            "limits": "No external mouse automation, real user library, or media tagging accuracy acceptance.",
+        ]
+        try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+            .write(to: output.appendingPathComponent("auto-tags-ui-verification.json"))
     }
 
     private static func verifyComposer(state: AppState, output: URL, checks: inout [String: Bool]) async throws {

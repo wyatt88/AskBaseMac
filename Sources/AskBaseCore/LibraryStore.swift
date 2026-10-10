@@ -182,6 +182,22 @@ public final class LibraryStore: @unchecked Sendable {
         try synchronized { try documentUnlocked(id: id) }
     }
 
+    /// Compare and write in one transaction, including against other app/CLI
+    /// connections. A late model response must never overwrite a user's edit.
+    func applyAutomaticTags(documentID: String, expectedUpdatedAt: Date, tags: [String]) throws -> Bool {
+        try synchronized {
+            try transaction {
+                guard !tags.isEmpty, var current = try documentUnlocked(id: documentID),
+                      current.status == .ready, current.tags.isEmpty,
+                      current.updatedAt == expectedUpdatedAt else { return false }
+                current.tags = tags
+                current.updatedAt = Date()
+                try writeDocument(current)
+                return true
+            }
+        }
+    }
+
     public func duplicate(contentHash: String, knowledgeBaseID: String) throws -> LibraryDocument? {
         try synchronized {
             try first("SELECT record FROM documents WHERE knowledge_base_id = ? AND content_hash = ?",

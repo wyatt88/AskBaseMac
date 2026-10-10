@@ -19,6 +19,7 @@
 - **媒体预览**：查看图片指定帧／页；播放音视频并定位到检索命中的时间段。
 - **知识问答**：检索文字原文和图片／视频的实际 OCR 文字，再调用本机 Ollama；保存对话历史，回答附带编号来源；回车发送、Shift＋回车换行。
 - **资料管理**：重命名、收藏、标签、重新索引、删除；清除相关索引和失效来源。
+- **自动标签**：复用现有 EmbeddingGemma 2，导入后匹配主题标签，也可为当前知识库的无标签资料补全；已有标签保持不变，可手动编辑。
 - **个人笔记**：独立编辑、保存、导出 Markdown。笔记不会自动成为检索资料。
 - **本地模型设置**：检查两个模型服务的连接状态，选择已安装的回答模型；只允许本机地址。
 
@@ -79,7 +80,7 @@ python3 scripts/build_app.py --install
 open "$HOME/Applications/AskBase Local.app"
 ```
 
-构建脚本生成真正的 `.app`，安装到 `~/Applications`，并生成 `dist/AskBase-Local-0.3.2-macOS-arm64.zip`。构建副本保存在 `dist/build-products.noindex/`，避免与安装版同时出现在系统应用搜索中；许可文件随应用打包。应用使用本地临时签名，尚未做 Apple 开发者签名、公证或 App Store 发布。其他 Mac 下载预编译版本时可能需要在系统设置中允许打开；也可以直接从源码构建。
+构建脚本生成真正的 `.app`，安装到 `~/Applications`，并生成 `dist/AskBase-Local-0.4.0-macOS-arm64.zip`。构建副本保存在 `dist/build-products.noindex/`，避免与安装版同时出现在系统应用搜索中；许可文件随应用打包。应用使用本地临时签名，尚未做 Apple 开发者签名、公证或 App Store 发布。其他 Mac 下载预编译版本时可能需要在系统设置中允许打开；也可以直接从源码构建。
 
 ### EmbeddingGemma 2
 
@@ -160,6 +161,7 @@ python3 scripts/verify_import_formats.py
 - [0.3.0 多模态更新与验收](docs/MULTIMODAL-UPDATE-0.3.0.md)
 - [0.3.0 多模态验收协议](docs/MULTIMODAL-PROTOCOL-0.3.0.md)
 - [0.3.2 输入框与回车发送](docs/CHAT-COMPOSER-0.3.2.md)
+- [0.4.0 自动主题标签](docs/AUTO-TAGS-0.4.0.md)
 - [0.3.1 云盘导入修复](docs/CLOUD-IMPORT-FIX-0.3.1.md)
 - [实现契约](docs/IMPLEMENTATION-CONTRACT.md)
 - [独立审查](docs/REVIEW.md)

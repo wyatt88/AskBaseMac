@@ -3,6 +3,37 @@ import Combine
 import UniformTypeIdentifiers
 import AskBaseCore
 
+struct TaggingActivity {
+    let id = UUID()
+    let knowledgeBaseID: String
+    let knowledgeBaseName: String
+    let documentIDs: Set<String>
+    let isBatch: Bool
+    let startedAt = Date()
+    var currentDocumentID: String?
+    var currentTitle = ""
+    var processed = 0
+    var succeeded = 0
+    var skipped = 0
+    var failures: [String] = []
+    var total: Int { documentIDs.count }
+}
+
+struct TaggingOutcome {
+    let activity: TaggingActivity
+    let wasCancelled: Bool
+
+    var title: String { wasCancelled ? "主题标签匹配已停止" : "主题标签匹配完成" }
+    var summary: String {
+        "已处理 \(activity.processed) / \(activity.total) 份 · \(activity.succeeded) 份新增标签"
+            + " · \(activity.skipped) 份未新增 · \(activity.failures.count) 份失败"
+    }
+    var explanation: String {
+        "已有标签保持不变。未新增表示未找到合适标签或资料已变更；可手动编辑标签。"
+            + (wasCancelled ? " 已写入的标签保留，未完成的资料可再次匹配。" : "")
+    }
+}
+
 @MainActor
 final class AppState: ObservableObject {
     @Published private(set) var isStarting = false
@@ -32,6 +63,11 @@ final class AppState: ObservableObject {
     @Published private(set) var importActivity: ImportActivity?
     @Published private(set) var isCancellingImport = false
     @Published private(set) var importOutcome: ImportOutcome?
+    @Published private(set) var taggingActivity: TaggingActivity?
+    @Published private(set) var taggingDocumentIDs: Set<String> = []
+    @Published private(set) var isCancellingTagging = false
+    @Published private(set) var taggingOutcome: TaggingOutcome?
+    @Published private(set) var isPreparingToQuit = false
 
     @Published var searchQuery = ""
     @Published private(set) var searchedQuery = ""
@@ -90,6 +126,8 @@ final class AppState: ObservableObject {
     private var notesBeingRemoved: Set<String> = []
     private var connectionToken: UUID?
     private var reindexTask: Task<Void, Never>?
+    private var taggingTask: Task<Void, Never>?
+    private var suppressTaggingOutcome = false
 
     init(root: URL = KnowledgeEngine.defaultRoot) {
         libraryRoot = root
@@ -149,20 +187,58 @@ final class AppState: ObservableObject {
     }
     var canImport: Bool {
         hasStarted && selectedKnowledgeBaseID != nil && importActivity == nil
-            && reindexActivity == nil && !isChoosingFiles && !isChoosingSearchMedia
-            && !isReadingDrop && !isDeleting && !isSavingSettings
+            && reindexActivity == nil && taggingActivity == nil && !isChoosingFiles && !isChoosingSearchMedia
+            && !isReadingDrop && !isDeleting && !isSavingSettings && !isPreparingToQuit
     }
     var settingsAreLocked: Bool {
         importActivity != nil || isAnswering || isSearching || isChoosingSearchMedia
-            || !reindexingDocumentIDs.isEmpty
+            || !reindexingDocumentIDs.isEmpty || taggingActivity != nil || isPreparingToQuit
+    }
+    var canReindex: Bool {
+        hasStarted && importActivity == nil && reindexActivity == nil && taggingActivity == nil
+            && !isDeleting && !isSavingSettings && !isPreparingToQuit
+    }
+    private var canStartTagging: Bool {
+        hasStarted && selectedKnowledgeBase != nil && taggingActivity == nil
+            && importActivity == nil && reindexActivity == nil && !isChoosingFiles && !isReadingDrop
+            && !isDeleting && deletion == nil && !isSavingSettings && !isCheckingConnections
+            && !isPreparingToQuit && changingDocumentIDs.isEmpty
+    }
+    var untaggedReadyDocuments: [LibraryDocument] {
+        documents.filter { $0.status == .ready && $0.tags.isEmpty }
+    }
+    var canCompleteTags: Bool { canStartTagging && !untaggedReadyDocuments.isEmpty }
+
+    func canTagDocument(_ id: String) -> Bool {
+        canStartTagging && untaggedReadyDocuments.contains { $0.id == id }
+    }
+
+    private func isImportingDocument(_ id: String) -> Bool {
+        guard let activity = importActivity else { return false }
+        return !activity.existingDocumentIDs.contains(id)
+            && snapshot.documents.contains { $0.id == id && $0.knowledgeBaseID == activity.knowledgeBaseID }
+    }
+
+    func canEditDocument(_ id: String) -> Bool {
+        documents.contains { $0.id == id } && !changingDocumentIDs.contains(id)
+            && !taggingDocumentIDs.contains(id) && !isImportingDocument(id)
+            && !isDeleting && !isPreparingToQuit
+    }
+
+    func canDeleteDocument(_ document: LibraryDocument) -> Bool {
+        documents.contains { $0.id == document.id } && document.status != .indexing
+            && !reindexingDocumentIDs.contains(document.id) && !changingDocumentIDs.contains(document.id)
+            && !isImportingDocument(document.id) && !isDeleting && !isPreparingToQuit
     }
     var canChooseSearchMedia: Bool {
         hasStarted && selectedKnowledgeBaseID != nil && readyDocumentCount > 0
             && !isSearching && !isChoosingSearchMedia && !isChoosingFiles && !isDeleting && !isSavingSettings
+            && !isPreparingToQuit
     }
     var canSearch: Bool {
         hasStarted && selectedKnowledgeBaseID != nil && readyDocumentCount > 0
             && !isSearching && !isChoosingSearchMedia && !isDeleting && !isSavingSettings
+            && !isPreparingToQuit
             && (searchMediaURL != nil || !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
     var embeddingCapabilities: EmbeddingCapabilities {
@@ -171,6 +247,7 @@ final class AppState: ObservableObject {
     var canAsk: Bool {
         selectedKnowledgeBaseID != nil && readyDocumentCount > 0
             && !settings.chatModel.isEmpty && !isAnswering && !isLoadingMessages && !isDeleting && !isSavingSettings
+            && !isPreparingToQuit
             && !chatDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     var importedDocumentsInProgress: [LibraryDocument] {
@@ -255,6 +332,9 @@ final class AppState: ObservableObject {
 
     func selectKnowledgeBase(_ id: String?) {
         guard id != selectedKnowledgeBaseID else { return }
+        cancelTagging(showOutcome: false)
+        taggingOutcome = nil
+        cancelImport()
         chatDrafts[chatDraftKey] = chatDraft
         discardSearch()
         mediaSearchPanelToken = nil
@@ -383,7 +463,8 @@ final class AppState: ObservableObject {
     }
 
     func importDocuments(_ urls: [URL], into base: KnowledgeBase) {
-        guard let engine, importActivity == nil, !urls.isEmpty else { return }
+        guard let engine, canImport, selectedKnowledgeBaseID == base.id,
+              snapshot.knowledgeBases.contains(where: { $0.id == base.id }), !urls.isEmpty else { return }
         guard urls.allSatisfy(\.isFileURL) else {
             showError("无法导入", message: "请选择本机文件或文件夹。")
             return
@@ -456,8 +537,8 @@ final class AppState: ObservableObject {
     }
 
     func reindexDocuments(_ documents: [LibraryDocument]) {
-        guard let engine, reindexActivity == nil, importActivity == nil, !isDeleting else { return }
-        let documents = documents.filter { $0.status != .indexing }
+        guard let engine, canReindex else { return }
+        let documents = documents.filter { $0.status != .indexing && $0.knowledgeBaseID == selectedKnowledgeBaseID }
         guard !documents.isEmpty else { return }
         let activity = ReindexActivity(total: documents.count)
         reindexActivity = activity
@@ -507,8 +588,110 @@ final class AppState: ObservableObject {
         reindexTask?.cancel()
     }
 
+    func matchTags(documentID: String) {
+        guard canTagDocument(documentID),
+              let document = documents.first(where: { $0.id == documentID }) else { return }
+        startTagging([document], isBatch: false)
+    }
+
+    func completeMissingTags() {
+        guard canCompleteTags else { return }
+        startTagging(untaggedReadyDocuments, isBatch: true)
+    }
+
+    private func startTagging(_ candidates: [LibraryDocument], isBatch: Bool) {
+        guard canStartTagging, let engine, let base = selectedKnowledgeBase else { return }
+        let candidates = candidates.filter {
+            $0.knowledgeBaseID == base.id && $0.status == .ready && $0.tags.isEmpty
+        }.sorted { $0.createdAt == $1.createdAt ? $0.id < $1.id : $0.createdAt < $1.createdAt }
+        guard !candidates.isEmpty else { return }
+        let activity = TaggingActivity(
+            knowledgeBaseID: base.id, knowledgeBaseName: base.name,
+            documentIDs: Set(candidates.map(\.id)), isBatch: isBatch
+        )
+        taggingActivity = activity
+        taggingDocumentIDs = activity.documentIDs
+        taggingOutcome = nil
+        isCancellingTagging = false
+        suppressTaggingOutcome = false
+        taggingTask = Task {
+            var cancelled = false
+            for candidate in candidates {
+                guard !Task.isCancelled, !isPreparingToQuit,
+                      selectedKnowledgeBaseID == base.id, taggingActivity?.id == activity.id else {
+                    cancelled = true
+                    break
+                }
+                taggingActivity?.currentDocumentID = candidate.id
+                taggingActivity?.currentTitle = candidate.title
+                do {
+                    // Read the exact ID again before matching; the core also checks the
+                    // document revision and empty tags atomically when committing.
+                    let current = try await engine.snapshot()
+                    try Task.checkCancellation()
+                    guard selectedKnowledgeBaseID == base.id, !isPreparingToQuit,
+                          taggingActivity?.id == activity.id else {
+                        cancelled = true
+                        break
+                    }
+                    if let document = current.documents.first(where: {
+                        $0.id == candidate.id && $0.knowledgeBaseID == base.id
+                    }), document.status == .ready, document.tags.isEmpty,
+                       !changingDocumentIDs.contains(document.id) {
+                        let added = try await engine.autoTag(documentID: document.id)
+                        if added.isEmpty {
+                            taggingActivity?.skipped += 1
+                        } else {
+                            taggingActivity?.succeeded += 1
+                        }
+                    } else {
+                        taggingActivity?.skipped += 1
+                    }
+                } catch {
+                    if error is CancellationError || Task.isCancelled {
+                        cancelled = true
+                        break
+                    }
+                    taggingActivity?.failures.append("\(candidate.title)：\(error.localizedDescription)")
+                }
+                taggingActivity?.processed += 1
+                // Keep metadata locked until the committed tags have been read back.
+                if await refresh(showErrors: false) {
+                    taggingDocumentIDs.remove(candidate.id)
+                }
+            }
+            await refresh(showErrors: false)
+            guard let finished = taggingActivity, finished.id == activity.id else { return }
+            if !suppressTaggingOutcome, selectedKnowledgeBaseID == base.id, !isPreparingToQuit {
+                taggingOutcome = TaggingOutcome(activity: finished, wasCancelled: cancelled || Task.isCancelled)
+            }
+            taggingActivity = nil
+            taggingDocumentIDs = []
+            isCancellingTagging = false
+            taggingTask = nil
+        }
+    }
+
+    func cancelTagging(showOutcome: Bool = true) {
+        guard taggingActivity != nil else { return }
+        if !showOutcome { suppressTaggingOutcome = true }
+        isCancellingTagging = true
+        taggingTask?.cancel()
+    }
+
+    func dismissTaggingOutcome() { taggingOutcome = nil }
+
+    func showTaggingDetails() {
+        guard let outcome = taggingOutcome,
+              outcome.activity.knowledgeBaseID == selectedKnowledgeBaseID else { return }
+        showError(outcome.title, message:
+            "「\(outcome.activity.knowledgeBaseName)」\n\(outcome.summary)\n\n\(outcome.explanation)"
+                + (outcome.activity.failures.isEmpty ? "" : "\n\n失败详情：\n" + outcome.activity.failures.joined(separator: "\n\n"))
+        )
+    }
+
     func toggleFavorite(_ document: LibraryDocument) {
-        guard !changingDocumentIDs.contains(document.id) else { return }
+        guard canEditDocument(document.id) else { return }
         Task {
             do {
                 try await updateDocument(id: document.id, isFavorite: !document.isFavorite)
@@ -518,11 +701,18 @@ final class AppState: ObservableObject {
 
     func updateDocument(id: String, title: String? = nil, tags: [String]? = nil,
                         isFavorite: Bool? = nil) async throws {
-        guard let engine, var document = snapshot.documents.first(where: { $0.id == id }) else {
-            throw AskBaseError.invalidInput("资料已不存在。")
+        guard let engine, canEditDocument(id) else {
+            throw AskBaseError.invalidInput("资料已移除、知识库已切换，或资料仍在处理中。请等待任务结束后重试。")
         }
+        let baseID = selectedKnowledgeBaseID
         changingDocumentIDs.insert(id)
         defer { changingDocumentIDs.remove(id) }
+        // Avoid writing stale tags back when only changing a title or favorite.
+        let current = try await engine.snapshot()
+        guard baseID == selectedKnowledgeBaseID,
+              var document = current.documents.first(where: { $0.id == id && $0.knowledgeBaseID == baseID }) else {
+            throw AskBaseError.invalidInput("资料已移除或知识库已切换，请重新打开资料。")
+        }
         if let title { document.title = title }
         if let tags { document.tags = tags }
         if let isFavorite { document.isFavorite = isFavorite }
@@ -908,6 +1098,7 @@ final class AppState: ObservableObject {
     }
 
     func requestDelete(_ document: LibraryDocument) {
+        guard canDeleteDocument(document) else { return }
         deletion = DeletionRequest(
             target: .document(document), title: "删除「\(document.title)」？",
             explanation: "这份资料、检索索引和应用内文件副本将被永久删除，历史问答中的相关来源会失效。你最初选择的文件不会被删除。此操作无法撤销。"
@@ -929,11 +1120,23 @@ final class AppState: ObservableObject {
     }
 
     func confirmDelete(_ request: DeletionRequest) {
-        guard let engine, !isDeleting else { return }
+        guard let engine, !isDeleting, !isPreparingToQuit else { return }
         deletion = nil
         isDeleting = true
+        let tagTaskToStop: Task<Void, Never>?
+        switch request.target {
+        case .knowledgeBase(let base) where taggingActivity?.knowledgeBaseID == base.id:
+            tagTaskToStop = taggingTask
+        case .document(let document) where taggingActivity?.documentIDs.contains(document.id) == true:
+            tagTaskToStop = taggingTask
+        default:
+            tagTaskToStop = nil
+        }
+        if tagTaskToStop != nil { cancelTagging(showOutcome: false) }
         Task {
             defer { isDeleting = false }
+            // Join before removal so a late tagging callback cannot outlive deletion.
+            await tagTaskToStop?.value
             var stoppedNoteIDs: [String] = []
             do {
                 switch request.target {
@@ -953,8 +1156,10 @@ final class AppState: ObservableObject {
                     try await engine.deleteKnowledgeBase(id: base.id)
                     noteIDs.forEach { noteDrafts[$0] = nil; noteSaveStates[$0] = nil }
                 case .document(let document):
-                    guard document.status != .indexing, !reindexingDocumentIDs.contains(document.id) else {
-                        throw AskBaseError.invalidInput("资料正在建立索引，请等待完成后删除。")
+                    guard let current = snapshot.documents.first(where: { $0.id == document.id }),
+                          current.status != .indexing, !reindexingDocumentIDs.contains(document.id),
+                          !changingDocumentIDs.contains(document.id), !isImportingDocument(document.id) else {
+                        throw AskBaseError.invalidInput("资料已移除或仍在处理中，请等待任务结束后重试。")
                     }
                     if selectedDocumentID == document.id { selectedDocumentID = nil }
                     if case .source(let source) = sheet, source.documentID == document.id { sheet = nil }
@@ -1005,7 +1210,8 @@ final class AppState: ObservableObject {
         connectionCheckedAt = Date()
         modelSelectionError = nil
         let models = Array(Set(result.chatModels)).sorted()
-        if result.chatAvailable, models.count == 1, settings.chatModel.isEmpty {
+        if result.chatAvailable, models.count == 1, settings.chatModel.isEmpty,
+           !settingsAreLocked, !isSavingSettings {
             var configured = settings
             configured.chatModel = models[0]
             do {
@@ -1097,10 +1303,18 @@ final class AppState: ObservableObject {
     }
 
     func prepareToQuit() async -> Bool {
+        isPreparingToQuit = true
+        cancelTagging(showOutcome: false)
         cancelSearch()
         cancelAnswer()
         cancelImport()
         reindexTask?.cancel()
-        return await flushNotes()
+        await taggingTask?.value
+        await importTask?.value
+        await reindexTask?.value
+        progressTask?.cancel()
+        let saved = await flushNotes()
+        if !saved { isPreparingToQuit = false }
+        return saved
     }
 }

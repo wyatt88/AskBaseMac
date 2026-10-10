@@ -26,6 +26,7 @@ struct AskBaseCLI {
                   askbase search <question>
                   askbase search-media <image-audio-or-video>
                   askbase reindex <document-id>
+                  askbase auto-tag <document-id>
                   askbase ask --model <ollama-model> <question>
                   askbase smoke [--model <ollama-model>]
                   askbase media-smoke
@@ -65,7 +66,9 @@ struct AskBaseCLI {
             case "import":
                 let report = try await engine.importDocuments(urls: arguments.map { URL(fileURLWithPath: $0) }, knowledgeBaseID: kbID)
                 try printJSON(["summary": report.summary, "failures": report.failures, "skipped": report.skipped,
-                               "imported": report.imported.map { ["id": $0.id, "title": $0.title, "chunks": $0.chunkCount] }])
+                               "tagging_warnings": report.taggingWarnings,
+                               "imported": report.imported.map { ["id": $0.id, "title": $0.title,
+                                                                  "chunks": $0.chunkCount, "tags": $0.tags] }])
                 if !report.failures.isEmpty { exit(1) }
             case "search":
                 let results = try await engine.search(query: arguments.joined(separator: " "), knowledgeBaseID: kbID)
@@ -78,6 +81,10 @@ struct AskBaseCLI {
                 guard arguments.count == 1 else { throw AskBaseError.invalidInput("请提供资料 ID。") }
                 try await engine.reindex(documentID: arguments[0])
                 try printJSON(["reindexed": arguments[0]])
+            case "auto-tag":
+                guard arguments.count == 1 else { throw AskBaseError.invalidInput("请提供资料 ID。") }
+                let tags = try await engine.autoTag(documentID: arguments[0])
+                try printJSON(["document_id": arguments[0], "added_tags": tags])
             case "ask":
                 if let model {
                     var settings = try await engine.settings()

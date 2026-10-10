@@ -1,0 +1,14 @@
+{
+  "version": "0.4.0",
+  "build": "7",
+  "archive": "AskBase-Local-0.4.0-macOS-arm64.zip",
+  "archive_bytes": 2209210,
+  "archive_sha256": "62ab718b2a404cab90fa11cbb4761ebf2592cfeec6a956f0b0830e6769624e57",
+  "binary_sha256": "9df8a9591afcc5275bb52380004bba074b1049b6e54d40206a6ab9764a62786b",
+  "architecture": "arm64",
+  "ad_hoc_signature_verified": true,
+  "zip_integrity_verified": true,
+  "licenses_verified": true,
+  "core_tests_passed": 181,
+  "model_setup_guards_passed": 19
+}

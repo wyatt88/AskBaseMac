@@ -35,7 +35,7 @@ struct DocumentDetailView: View {
                         header(document)
                         if let error = document.errorMessage, document.status == .failed {
                             ErrorPanel(title: "索引未完成", message: error, actionTitle: "重试索引",
-                                       isActionDisabled: state.reindexActivity != nil || state.importActivity != nil) {
+                                       isActionDisabled: !state.canReindex) {
                                 state.reindex(document)
                             }
                         }
@@ -117,7 +117,7 @@ struct DocumentDetailView: View {
                 }
                 .buttonStyle(.borderless)
                 .help(document.isFavorite ? "取消收藏" : "收藏资料")
-                .disabled(state.changingDocumentIDs.contains(document.id))
+                .disabled(!state.canEditDocument(document.id))
             }
             Text(document.fileName).font(.callout).foregroundStyle(.secondary)
                 .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
@@ -139,25 +139,65 @@ struct DocumentDetailView: View {
                     Label("打开原文件", systemImage: "arrow.up.right.square")
                 }.controlSize(.small)
                 Button("编辑信息") { editingMetadata = true }.controlSize(.small)
-                    .disabled(state.changingDocumentIDs.contains(document.id))
+                    .disabled(!state.canEditDocument(document.id))
                 Spacer(minLength: 0)
                 Menu {
                     Button("在 Finder 中显示") { state.openOriginal(document.id, reveal: true) }
                     Button(document.status == .failed ? "重试索引" : "重建索引") { state.reindex(document) }
-                        .disabled(document.status == .indexing || state.reindexActivity != nil || state.importActivity != nil)
+                        .disabled(document.status == .indexing || !state.canReindex)
                     Divider()
                     Button("删除资料…", role: .destructive) { state.requestDelete(document) }
-                        .disabled(document.status == .indexing || state.reindexingDocumentIDs.contains(document.id) || state.isDeleting)
+                        .disabled(!state.canDeleteDocument(document))
                 } label: { Image(systemName: "ellipsis.circle") }
                     .menuStyle(.borderlessButton).fixedSize().help("更多资料操作")
             }
             if document.tags.isEmpty {
-                Button { editingMetadata = true } label: {
-                    Label("添加标签", systemImage: "tag")
-                }.buttonStyle(.borderless).font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 9) {
+                    HStack(spacing: 14) {
+                        Button { state.matchTags(documentID: document.id) } label: {
+                            Label("匹配主题标签", systemImage: "tag")
+                        }
+                        .controlSize(.small).disabled(!state.canTagDocument(document.id))
+                        .accessibilityIdentifier("matchDocumentTags")
+                        Button("手动添加") { editingMetadata = true }
+                            .buttonStyle(.borderless).font(.caption)
+                            .disabled(!state.canEditDocument(document.id))
+                    }
+                    Text("复用本机 EmbeddingGemma 2 匹配主题标签，无需额外下载模型。匹配后可手动编辑。")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if document.status != .ready {
+                        Text("索引完成后可匹配标签。").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 80), alignment: .leading)], alignment: .leading, spacing: 6) {
                     ForEach(document.tags, id: \.self) { TagLabel(text: $0) }
+                }
+            }
+            if state.taggingDocumentIDs.contains(document.id) {
+                HStack(spacing: 9) {
+                    ProgressView().controlSize(.mini)
+                    Text(state.isCancellingTagging ? "正在停止…"
+                         : state.taggingActivity?.currentDocumentID == document.id ? "正在匹配主题…" : "等待匹配主题…")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("停止匹配") { state.cancelTagging() }
+                        .controlSize(.small).disabled(state.isCancellingTagging)
+                }
+            } else if let outcome = state.taggingOutcome, !outcome.activity.isBatch,
+                      outcome.activity.knowledgeBaseID == state.selectedKnowledgeBaseID,
+                      outcome.activity.documentIDs.contains(document.id) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(outcome.wasCancelled ? "主题标签匹配已停止，已写入的标签保留。"
+                         : outcome.activity.succeeded > 0 ? "已匹配主题标签，可在“编辑信息”中调整。"
+                         : outcome.activity.failures.isEmpty ? "未找到合适标签或资料已变更，可手动添加。"
+                         : "主题标签匹配失败，资料仍可检索。")
+                        .font(.caption).foregroundStyle(.secondary)
+                    ForEach(Array(outcome.activity.failures.enumerated()), id: \.offset) { _, failure in
+                        Text(failure).font(.caption).foregroundStyle(.orange)
+                            .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
         }
@@ -316,7 +356,10 @@ struct DocumentMetadataEditor: View {
                             guard tags.count <= 12, tags.allSatisfy({ $0.count <= 32 }) else {
                                 throw AskBaseError.invalidInput("最多可添加 12 个标签，每个标签不超过 32 字。")
                             }
-                            try await state.updateDocument(id: document.id, title: title, tags: tags)
+                            try await state.updateDocument(
+                                id: document.id, title: title == document.title ? nil : title,
+                                tags: tags == document.tags.sorted() ? nil : tags
+                            )
                             dismiss()
                         } catch {
                             self.error = error.localizedDescription
@@ -325,7 +368,8 @@ struct DocumentMetadataEditor: View {
                     }
                 }
                 .keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
-                .disabled(saving || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || title.count > 128)
+                .disabled(saving || !state.canEditDocument(document.id)
+                          || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || title.count > 128)
             }
         }
         .padding(28).frame(width: 480)
