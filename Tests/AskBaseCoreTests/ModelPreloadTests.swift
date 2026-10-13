@@ -13,7 +13,9 @@ private final class PreloadProtocol: URLProtocol {
     static var metadata: [String: Any] = [:]
     static var response: [String: Any] = [:]
     static var heldPath: String?
-    static var stopped = false
+    static var stoppedPaths: Set<String> = []
+    static var generation = UUID()
+    private var generation: UUID?
     static var captured: [Request] { lock.withLock { requests } }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -32,6 +34,7 @@ private final class PreloadProtocol: URLProtocol {
         }
         let path = request.url!.path
         let (payload, held) = Self.lock.withLock {
+            generation = Self.generation
             Self.requests.append(Request(path: path, method: request.httpMethod,
                                          body: (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]))
             let payload = path == "/api/show" ? Self.metadata : Self.response
@@ -45,7 +48,13 @@ private final class PreloadProtocol: URLProtocol {
         client?.urlProtocol(self, didLoad: body)
         client?.urlProtocolDidFinishLoading(self)
     }
-    override func stopLoading() { Self.lock.withLock { Self.stopped = true } }
+    override func stopLoading() {
+        Self.lock.withLock {
+            if generation == Self.generation, let path = request.url?.path {
+                Self.stoppedPaths.insert(path)
+            }
+        }
+    }
 }
 
 final class ModelPreloadTests: XCTestCase {
@@ -59,7 +68,8 @@ final class ModelPreloadTests: XCTestCase {
             ]
             PreloadProtocol.response = ["done": true, "response": ""]
             PreloadProtocol.heldPath = nil
-            PreloadProtocol.stopped = false
+            PreloadProtocol.stoppedPaths = []
+            PreloadProtocol.generation = UUID()
         }
     }
 
@@ -169,7 +179,17 @@ final class ModelPreloadTests: XCTestCase {
             try await task.value
             XCTFail("Cancelled preload must not succeed")
         } catch { XCTAssertTrue(error is CancellationError) }
+        // URLSession can resume the cancelled task before delivering the
+        // protocol's stopLoading callback on its own queue (notably macOS 15).
+        // Wait for this exact request, without accepting an earlier request's stop.
+        let stopDeadline = ContinuousClock.now + .seconds(3)
+        while !PreloadProtocol.lock.withLock({ PreloadProtocol.stoppedPaths.contains(path) }) {
+            guard ContinuousClock.now < stopDeadline else {
+                XCTFail("Cancelled transport did not receive stopLoading for \(path)")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
         XCTAssertEqual(PreloadProtocol.captured.map(\.path), expectedPaths)
-        XCTAssertTrue(PreloadProtocol.lock.withLock { PreloadProtocol.stopped })
     }
 }

@@ -27,6 +27,8 @@ App 正常退出发送管道停止消息并等待确认；App 崩溃或被强制
 
 191 项 Swift 核心测试、16 项安装脚本测试、19 项嵌入部署保护测试、37 项 supervisor 测试通过。真实进程测试及首次失败的修复记录见[机器可读证据](verification/model-lifecycle-0.5.0.json)和[离线反例审查](MODEL-LIFECYCLE-REVIEW-0.5.0.md)。
 
+首次 GitHub macOS 15 检查发现取消测试过早读取 `URLProtocol.stopLoading` 回调状态。测试已改为有界等待对应请求的明确回调，并按每次测试的标识排除历史回调；预加载测试 10/10 重新通过。此修正只改测试同步，不改变 App 或模型服务代码。
+
 ## 重跑
 
 先关闭其他 AskBase 实例。以下显式验证会加载本机已有模型，并迁移已核实归属的旧 AskBase 服务；只使用临时空资料库：
