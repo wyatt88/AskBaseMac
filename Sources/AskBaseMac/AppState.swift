@@ -68,6 +68,9 @@ final class AppState: ObservableObject {
     @Published private(set) var isCancellingTagging = false
     @Published private(set) var taggingOutcome: TaggingOutcome?
     @Published private(set) var isPreparingToQuit = false
+    @Published private(set) var quitProgress = ""
+    @Published private(set) var quitFailure: String?
+    let modelRuntime: LocalModelRuntime
 
     @Published var searchQuery = ""
     @Published private(set) var searchedQuery = ""
@@ -128,15 +131,28 @@ final class AppState: ObservableObject {
     private var reindexTask: Task<Void, Never>?
     private var taggingTask: Task<Void, Never>?
     private var suppressTaggingOutcome = false
+    private var runtimeObservation: AnyCancellable?
+    // Keep cancelled/replaced tasks registered until they actually finish.
+    // A request can outlive a tab change or its visible progress indicator.
+    private var workTasks: [UUID: Task<Void, Never>] = [:]
+    private var runtimeStartupTask: Task<Void, Never>?
+    private var preloadTask: Task<Void, Never>?
+    private var preloadToken: UUID?
+    private var preloadedModel: String?
 
-    init(root: URL = KnowledgeEngine.defaultRoot) {
+    init(root: URL = KnowledgeEngine.defaultRoot, manageModels: Bool? = nil) {
         libraryRoot = root
+        modelRuntime = LocalModelRuntime(enabled: manageModels
+            ?? (root.standardizedFileURL == KnowledgeEngine.defaultRoot.standardizedFileURL))
+        runtimeObservation = modelRuntime.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
     }
 
     #if DEBUG
     /// Used only by synthetic checks with explicitly injected offline clients.
     convenience init(verificationEngine: KnowledgeEngine) {
-        self.init(root: verificationEngine.root)
+        self.init(root: verificationEngine.root, manageModels: false)
         engine = verificationEngine
     }
 
@@ -188,21 +204,22 @@ final class AppState: ObservableObject {
     var canImport: Bool {
         hasStarted && selectedKnowledgeBaseID != nil && importActivity == nil
             && reindexActivity == nil && taggingActivity == nil && !isChoosingFiles && !isChoosingSearchMedia
-            && !isReadingDrop && !isDeleting && !isSavingSettings && !isPreparingToQuit
+            && !isReadingDrop && !isDeleting && !isSavingSettings && !isPreparingToQuit && !modelRuntime.isBusy
     }
     var settingsAreLocked: Bool {
         importActivity != nil || isAnswering || isSearching || isChoosingSearchMedia
             || !reindexingDocumentIDs.isEmpty || taggingActivity != nil || isPreparingToQuit
+            || modelRuntime.isBusy
     }
     var canReindex: Bool {
         hasStarted && importActivity == nil && reindexActivity == nil && taggingActivity == nil
-            && !isDeleting && !isSavingSettings && !isPreparingToQuit
+            && !isDeleting && !isSavingSettings && !isPreparingToQuit && !modelRuntime.isBusy
     }
     private var canStartTagging: Bool {
         hasStarted && selectedKnowledgeBase != nil && taggingActivity == nil
             && importActivity == nil && reindexActivity == nil && !isChoosingFiles && !isReadingDrop
             && !isDeleting && deletion == nil && !isSavingSettings && !isCheckingConnections
-            && !isPreparingToQuit && changingDocumentIDs.isEmpty
+            && !isPreparingToQuit && !modelRuntime.isBusy && changingDocumentIDs.isEmpty
     }
     var untaggedReadyDocuments: [LibraryDocument] {
         documents.filter { $0.status == .ready && $0.tags.isEmpty }
@@ -233,12 +250,12 @@ final class AppState: ObservableObject {
     var canChooseSearchMedia: Bool {
         hasStarted && selectedKnowledgeBaseID != nil && readyDocumentCount > 0
             && !isSearching && !isChoosingSearchMedia && !isChoosingFiles && !isDeleting && !isSavingSettings
-            && !isPreparingToQuit
+            && !isPreparingToQuit && !modelRuntime.isBusy
     }
     var canSearch: Bool {
         hasStarted && selectedKnowledgeBaseID != nil && readyDocumentCount > 0
             && !isSearching && !isChoosingSearchMedia && !isDeleting && !isSavingSettings
-            && !isPreparingToQuit
+            && !isPreparingToQuit && !modelRuntime.isBusy
             && (searchMediaURL != nil || !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
     var embeddingCapabilities: EmbeddingCapabilities {
@@ -247,7 +264,7 @@ final class AppState: ObservableObject {
     var canAsk: Bool {
         selectedKnowledgeBaseID != nil && readyDocumentCount > 0
             && !settings.chatModel.isEmpty && !isAnswering && !isLoadingMessages && !isDeleting && !isSavingSettings
-            && !isPreparingToQuit
+            && !isPreparingToQuit && !modelRuntime.isBusy
             && !chatDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     var importedDocumentsInProgress: [LibraryDocument] {
@@ -260,13 +277,21 @@ final class AppState: ObservableObject {
     var hasUnsavedNotes: Bool { !noteDrafts.isEmpty }
 
     func start() async {
-        guard !isStarting, !hasStarted else { return }
+        guard !isStarting, !hasStarted, !isPreparingToQuit, !Task.isCancelled else { return }
         if let launchFailure {
             startupError = launchFailure
             return
         }
         isStarting = true
         startupError = nil
+        let task = runWork { [self] in await openLibrary() }
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: { task.cancel() }
+    }
+
+    private func openLibrary() async {
+        defer { isStarting = false }
         do {
             let openedEngine: KnowledgeEngine
             if let engine {
@@ -279,6 +304,8 @@ final class AppState: ObservableObject {
             }
             let initialSnapshot = try await openedEngine.snapshot()
             let initialSettings = try await openedEngine.settings()
+            try Task.checkCancellation()
+            guard !isPreparingToQuit else { return }
             engine = openedEngine
             snapshot = initialSnapshot
             settings = initialSettings
@@ -287,10 +314,76 @@ final class AppState: ObservableObject {
                 ?? initialSnapshot.knowledgeBases.first?.id
             hasStarted = true
             isStarting = false
-            await checkConnections()
+            if modelRuntime.enabled {
+                startModels()
+                await runtimeStartupTask?.value
+            } else {
+                await checkConnections()
+            }
         } catch {
-            startupError = error.localizedDescription
-            isStarting = false
+            if !(error is CancellationError) { startupError = error.localizedDescription }
+        }
+    }
+
+    @discardableResult
+    private func runWork(_ operation: @escaping @MainActor () async -> Void) -> Task<Void, Never> {
+        let id = UUID()
+        let task = Task { @MainActor [self] in
+            defer { workTasks[id] = nil }
+            await operation()
+        }
+        workTasks[id] = task
+        return task
+    }
+
+    func startModels() {
+        guard hasStarted, !isPreparingToQuit, modelRuntime.enabled,
+              runtimeStartupTask == nil,
+              modelRuntime.phase == .idle || modelRuntime.canRestart else { return }
+        preloadedModel = nil
+        modelStatus = nil
+        connectionCheckedAt = nil
+        runtimeStartupTask = runWork { [self] in
+            defer { runtimeStartupTask = nil }
+            await modelRuntime.start(settings: settings)
+            guard !Task.isCancelled, !isPreparingToQuit else { return }
+            await checkConnections()
+            await preloadTask?.value
+        }
+    }
+
+    private func preloadSelectedModel() {
+        guard !isPreparingToQuit, !Task.isCancelled,
+              modelRuntime.managesOllama(at: settings.ollamaBaseURL),
+              !settings.chatModel.isEmpty else { return }
+        let key = "\(settings.ollamaBaseURL)\n\(settings.chatModel)"
+        guard key != preloadedModel else { return }
+        let previous = preloadTask
+        previous?.cancel()
+        let token = UUID()
+        let configuration = settings
+        preloadToken = token
+        preloadTask = runWork { [self] in
+            defer {
+                if preloadToken == token { preloadTask = nil }
+            }
+            // Do not overlap a changed selection with a still-cancelling load.
+            await previous?.value
+            guard !Task.isCancelled, !isPreparingToQuit,
+                  modelRuntime.managesOllama(at: configuration.ollamaBaseURL) else { return }
+            modelRuntime.preloadMessage = "正在加载回答模型「\(configuration.chatModel)」…"
+            do {
+                try await OllamaClient(base: configuration.ollamaBaseURL).preload(model: configuration.chatModel)
+                try Task.checkCancellation()
+                guard preloadToken == token else { return }
+                preloadedModel = key
+                modelRuntime.preloadMessage = "回答模型「\(configuration.chatModel)」已加载，随应用保持可用。"
+            } catch {
+                guard preloadToken == token else { return }
+                modelRuntime.preloadMessage = error is CancellationError
+                    ? "回答模型加载已取消。"
+                    : "回答模型预加载未完成：\(error.localizedDescription)"
+            }
         }
     }
 
@@ -331,7 +424,7 @@ final class AppState: ObservableObject {
     }
 
     func selectKnowledgeBase(_ id: String?) {
-        guard id != selectedKnowledgeBaseID else { return }
+        guard !isPreparingToQuit, id != selectedKnowledgeBaseID else { return }
         cancelTagging(showOutcome: false)
         taggingOutcome = nil
         cancelImport()
@@ -368,7 +461,7 @@ final class AppState: ObservableObject {
     }
 
     func saveKnowledgeBase(name: String, existing: KnowledgeBase?) async throws {
-        guard let engine else { throw AskBaseError.storage("资料库尚未打开。") }
+        guard let engine, !isPreparingToQuit else { throw AskBaseError.storage("资料库尚未打开或正在退出。") }
         if let existing {
             try await engine.renameKnowledgeBase(id: existing.id, name: name)
             await refresh()
@@ -422,7 +515,7 @@ final class AppState: ObservableObject {
         let providers = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
         guard !providers.isEmpty else { return false }
         isReadingDrop = true
-        Task {
+        runWork { [self] in
             var urls: [URL] = []
             var failures: [String] = []
             for provider in providers {
@@ -477,7 +570,7 @@ final class AppState: ObservableObject {
         importOutcome = nil
         isCancellingImport = false
         startProgressRefresh()
-        importTask = Task {
+        importTask = runWork { [self] in
             let scoped = urls.filter { $0.startAccessingSecurityScopedResource() }
             defer { scoped.forEach { $0.stopAccessingSecurityScopedResource() } }
             var outcome: ImportOutcome
@@ -522,7 +615,7 @@ final class AppState: ObservableObject {
 
     private func startProgressRefresh() {
         guard progressTask == nil else { return }
-        progressTask = Task { [weak self] in
+        progressTask = runWork { [weak self] in
             while let self, self.importActivity != nil || !self.reindexingDocumentIDs.isEmpty {
                 await self.refresh(showErrors: false)
                 do { try await Task.sleep(for: .milliseconds(800)) }
@@ -545,7 +638,7 @@ final class AppState: ObservableObject {
         isCancellingReindex = false
         reindexingDocumentIDs = Set(documents.map(\.id))
         startProgressRefresh()
-        reindexTask = Task {
+        reindexTask = runWork { [self] in
             for document in documents {
                 guard !Task.isCancelled, reindexActivity?.id == activity.id else { break }
                 reindexActivity?.currentDocumentID = document.id
@@ -614,7 +707,7 @@ final class AppState: ObservableObject {
         taggingOutcome = nil
         isCancellingTagging = false
         suppressTaggingOutcome = false
-        taggingTask = Task {
+        taggingTask = runWork { [self] in
             var cancelled = false
             for candidate in candidates {
                 guard !Task.isCancelled, !isPreparingToQuit,
@@ -692,7 +785,7 @@ final class AppState: ObservableObject {
 
     func toggleFavorite(_ document: LibraryDocument) {
         guard canEditDocument(document.id) else { return }
-        Task {
+        runWork { [self] in
             do {
                 try await updateDocument(id: document.id, isFavorite: !document.isFavorite)
             } catch { showError("无法更新收藏", error) }
@@ -744,7 +837,7 @@ final class AppState: ObservableObject {
 
     func openOriginal(_ documentID: String, reveal: Bool = false) {
         guard let document = documents.first(where: { $0.id == documentID }) else { return }
-        Task {
+        runWork { [self] in
             do {
                 let url = try await originalURL(for: documentID)
                 if reveal {
@@ -847,7 +940,7 @@ final class AppState: ObservableObject {
         searchNotice = nil
         isSearching = true
         isCancellingSearch = false
-        searchTask = Task {
+        searchTask = runWork { [self] in
             let scopedURL: URL?
             if case .media(let url) = input, url.startAccessingSecurityScopedResource() { scopedURL = url }
             else { scopedURL = nil }
@@ -897,7 +990,7 @@ final class AppState: ObservableObject {
     }
 
     func selectConversation(_ id: String?) {
-        guard id != selectedConversationID || id == nil else { return }
+        guard !isPreparingToQuit, id != selectedConversationID || id == nil else { return }
         chatDrafts[chatDraftKey] = chatDraft
         abandonAnswer()
         messageTask?.cancel()
@@ -911,7 +1004,7 @@ final class AppState: ObservableObject {
         let token = UUID()
         messageToken = token
         isLoadingMessages = true
-        messageTask = Task {
+        messageTask = runWork { [self] in
             do {
                 let loaded = try await engine.messages(conversationID: id)
                 guard messageToken == token, !Task.isCancelled else { return }
@@ -939,7 +1032,7 @@ final class AppState: ObservableObject {
         chatNotice = nil
         chatDraft = ""
         chatDrafts[chatDraftKey] = ""
-        answerTask = Task {
+        answerTask = runWork { [self] in
             var conversationID = existingConversationID
             do {
                 if conversationID == nil {
@@ -999,9 +1092,9 @@ final class AppState: ObservableObject {
     }
 
     func createNote() {
-        guard let baseID = selectedKnowledgeBaseID, let engine, !isCreatingNote else { return }
+        guard let baseID = selectedKnowledgeBaseID, let engine, !isCreatingNote, !isPreparingToQuit else { return }
         isCreatingNote = true
-        Task {
+        runWork { [self] in
             defer { isCreatingNote = false }
             let note = LibraryNote(knowledgeBaseID: baseID, title: "未命名笔记", body: "")
             do {
@@ -1020,7 +1113,7 @@ final class AppState: ObservableObject {
     }
 
     func editNote(id: String, title: String? = nil, body: String? = nil) {
-        guard !notesBeingRemoved.contains(id), var note = note(for: id) else { return }
+        guard !isPreparingToQuit, !notesBeingRemoved.contains(id), var note = note(for: id) else { return }
         if let title { note.title = title }
         if let body { note.body = body }
         note.updatedAt = Date()
@@ -1133,7 +1226,7 @@ final class AppState: ObservableObject {
             tagTaskToStop = nil
         }
         if tagTaskToStop != nil { cancelTagging(showOutcome: false) }
-        Task {
+        runWork { [self] in
             defer { isDeleting = false }
             // Join before removal so a late tagging callback cannot outlive deletion.
             await tagTaskToStop?.value
@@ -1200,12 +1293,23 @@ final class AppState: ObservableObject {
     }
 
     func checkConnections() async {
-        guard let engine, !isCheckingConnections else { return }
+        guard engine != nil, !isCheckingConnections, !isPreparingToQuit, !Task.isCancelled else { return }
+        isCheckingConnections = true
+        let task = runWork { [self] in
+            defer { isCheckingConnections = false }
+            await performConnectionCheck()
+        }
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: { task.cancel() }
+    }
+
+    private func performConnectionCheck() async {
+        guard let engine, !Task.isCancelled else { return }
         let token = UUID()
         connectionToken = token
-        isCheckingConnections = true
         let result = await engine.modelStatus()
-        guard connectionToken == token else { return }
+        guard connectionToken == token, !Task.isCancelled, !isPreparingToQuit else { return }
         modelStatus = result
         connectionCheckedAt = Date()
         modelSelectionError = nil
@@ -1222,7 +1326,7 @@ final class AppState: ObservableObject {
                 modelSelectionError = "已发现回答模型，但未能保存选择：\(error.localizedDescription)"
             }
         }
-        isCheckingConnections = false
+        preloadSelectedModel()
     }
 
     func applySettings(_ draft: AppSettings, testConnections: Bool) async throws {
@@ -1239,13 +1343,29 @@ final class AppState: ObservableObject {
         try await engine.saveSettings(saved)
         let endpointsChanged = saved.embeddingBaseURL != settings.embeddingBaseURL
             || saved.ollamaBaseURL != settings.ollamaBaseURL
-        if saved.chatModel != settings.chatModel { modelSelectionNotice = nil }
+        let modelChanged = saved.chatModel != settings.chatModel
+        if modelChanged { modelSelectionNotice = nil }
         settings = saved
         if endpointsChanged {
             modelStatus = nil
             connectionCheckedAt = nil
         }
+        guard !isPreparingToQuit, !Task.isCancelled else { return }
+        if endpointsChanged || modelChanged {
+            preloadTask?.cancel()
+            await preloadTask?.value
+            preloadedModel = nil
+            modelRuntime.preloadMessage = nil
+        }
+        guard !isPreparingToQuit, !Task.isCancelled else { return }
+        if endpointsChanged, modelRuntime.enabled {
+            try await modelRuntime.stop()
+            guard !isPreparingToQuit, !Task.isCancelled else { return }
+            startModels()
+            return
+        }
         if testConnections { await checkConnections() }
+        else if modelChanged { preloadSelectedModel() }
     }
 
     func exportNote(_ note: LibraryNote) {
@@ -1303,18 +1423,68 @@ final class AppState: ObservableObject {
     }
 
     func prepareToQuit() async -> Bool {
+        guard !isPreparingToQuit else { return false }
         isPreparingToQuit = true
+        quitFailure = nil
+        quitProgress = "正在停止请求并保存笔记…"
+        mediaSearchPanelToken = nil
+        mediaSearchPanel?.cancel(nil)
+        mediaSearchPanel = nil
+        isChoosingSearchMedia = false
         cancelTagging(showOutcome: false)
         cancelSearch()
         cancelAnswer()
         cancelImport()
         reindexTask?.cancel()
-        await taggingTask?.value
-        await importTask?.value
-        await reindexTask?.value
         progressTask?.cancel()
-        let saved = await flushNotes()
-        if !saved { isPreparingToQuit = false }
-        return saved
+        // This includes requests abandoned by a library/conversation switch,
+        // startup, connection checks, warm loads and pending note creation.
+        for task in Array(workTasks.values) { task.cancel() }
+        do {
+            let deadline = ContinuousClock.now + .seconds(30)
+            while !workTasks.isEmpty || isSavingSettings || !changingDocumentIDs.isEmpty {
+                try Task.checkCancellation()
+                guard ContinuousClock.now < deadline else {
+                    throw AskBaseError.storage("停止请求等待超时，尚未完成全部收尾。应用保持打开，请稍后重试退出。")
+                }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            // Existing note writers finish first; retry cancelled/debounced
+            // drafts once, without ever starting concurrent writers.
+            quitProgress = "正在保存笔记…"
+            let noteDeadline = ContinuousClock.now + .seconds(15)
+            while !noteTasks.isEmpty {
+                try Task.checkCancellation()
+                guard ContinuousClock.now < noteDeadline else {
+                    throw AskBaseError.storage("笔记保存等待超时。修改仍保留在编辑器中，模型服务尚未关闭。")
+                }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            for id in Array(noteDrafts.keys) { startNoteSave(id, immediate: true) }
+            while !noteTasks.isEmpty {
+                try Task.checkCancellation()
+                guard ContinuousClock.now < noteDeadline else {
+                    throw AskBaseError.storage("笔记保存等待超时。请处理保存问题后再退出。")
+                }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            guard noteDrafts.isEmpty else {
+                throw AskBaseError.storage("有笔记尚未保存。修改仍保留在编辑器中，请处理保存错误后再退出。")
+            }
+            try Task.checkCancellation()
+            quitProgress = "正在释放 AskBase 专用模型服务…"
+            try await modelRuntime.stop()
+            try Task.checkCancellation()
+            quitProgress = "保存和模型释放已完成。"
+            return true
+        } catch {
+            isPreparingToQuit = false
+            if error is CancellationError {
+                notice = "已取消退出。已发出的模型释放会继续完成，可在设置中重新启动模型。"
+            } else {
+                quitFailure = error.localizedDescription
+            }
+            return false
+        }
     }
 }

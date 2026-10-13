@@ -267,6 +267,31 @@ public final class OllamaClient: ChatProviding, @unchecked Sendable {
         return string.isEmpty
     }
 
+    /// Load an already installed local completion model without running a
+    /// prompt. Callers must only use this for an app-owned Ollama service.
+    public func preload(model: String) async throws {
+        guard !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AskBaseError.modelUnavailable("请先在设置中选择一个本地回答模型。")
+        }
+        try Task.checkCancellation()
+        try await requireLocalModel(model)
+        try Task.checkCancellation()
+        let payload: [String: Any] = [
+            "model": model, "prompt": "", "stream": false, "keep_alive": -1,
+        ]
+        struct Response: Decodable {
+            let done: Bool
+            let response: String?
+        }
+        let data = try await http.request(base: base, path: "api/generate",
+                                         body: JSONSerialization.data(withJSONObject: payload), timeout: 300)
+        try Task.checkCancellation()
+        let result = try JSONDecoder().decode(Response.self, from: data)
+        guard result.done, (result.response ?? "").isEmpty else {
+            throw AskBaseError.modelUnavailable("回答模型未确认空提示加载完成。")
+        }
+    }
+
     public func answer(model: String, question: String, sources: [SearchResult],
                        history: [ChatMessage]) async throws -> String {
         guard !model.isEmpty else { throw AskBaseError.modelUnavailable("请先在设置中选择一个本地回答模型。") }
@@ -307,7 +332,8 @@ public final class OllamaClient: ChatProviding, @unchecked Sendable {
         """])
         let payload: [String: Any] = [
             "model": model, "messages": messages, "stream": false, "think": false, "truncate": false,
-            "keep_alive": "5m",
+            // The owned supervisor sets its service default to -1. Leave
+            // external/shared servers and CLI use on their existing policy.
             "options": ["temperature": 0.15, "num_ctx": 16384, "num_predict": 1536],
         ]
         struct Response: Decodable {

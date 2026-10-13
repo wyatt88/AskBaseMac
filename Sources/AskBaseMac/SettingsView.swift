@@ -13,7 +13,9 @@ struct SettingsView: View {
         draft.embeddingBaseURL.trimmingCharacters(in: .whitespacesAndNewlines) == state.settings.embeddingBaseURL
             && draft.ollamaBaseURL.trimmingCharacters(in: .whitespacesAndNewlines) == state.settings.ollamaBaseURL
     }
-    private var isBusy: Bool { saving || state.isSavingSettings || state.isCheckingConnections }
+    private var isBusy: Bool {
+        saving || state.isSavingSettings || state.isCheckingConnections || state.modelRuntime.isBusy
+    }
     private var selectableModels: [String] { endpointsMatch ? state.availableChatModels : [] }
 
     var body: some View {
@@ -54,6 +56,7 @@ struct SettingsView: View {
                         Label(savedNotice, systemImage: "checkmark.circle")
                             .font(.callout).foregroundStyle(AppPalette.accent)
                     }
+                    runtimeSettings
                     embeddingSettings
                     chatSettings
                     retrievalSettings
@@ -72,6 +75,35 @@ struct SettingsView: View {
         .onAppear { draft = state.settings }
         .onChange(of: state.settings) { old, new in
             if draft == old || saving { draft = new }
+        }
+    }
+
+    private var runtimeSettings: some View {
+        settingsGroup("模型随应用运行", symbol: "power") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    if state.modelRuntime.isBusy { ProgressView().controlSize(.small) }
+                    Text(state.modelRuntime.message)
+                        .font(.callout).textSelection(.enabled)
+                }
+                if state.modelRuntime.enabled {
+                    Text(state.modelRuntime.ownershipSummary)
+                        .font(.callout).foregroundStyle(.secondary)
+                    ForEach(Array(state.modelRuntime.details.enumerated()), id: \.offset) { _, detail in
+                        Text(detail).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                    }
+                    if let preload = state.modelRuntime.preloadMessage {
+                        Text(preload).font(.callout).foregroundStyle(.secondary)
+                    }
+                    Text("专用模型服务自动启动；退出或关闭最后一个窗口时，先停止请求、保存笔记，再释放专用服务。外部或共享服务由原启动方管理。")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if state.modelRuntime.canRestart {
+                        Button("重新启动模型") { state.startModels() }
+                            .disabled(state.isPreparingToQuit || state.settingsAreLocked || isBusy)
+                    }
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
 

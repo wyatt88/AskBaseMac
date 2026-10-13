@@ -26,6 +26,10 @@ enum AppSmokeVerifier {
             }
             try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
             checks["startup_ready"] = state.hasStarted && state.startupError == nil
+            if args.contains("--ui-lifecycle-only") {
+                try await verifyLifecycle(state: state, output: output, checks: &checks)
+                return
+            }
             if args.contains("--ui-composer-only") {
                 try await verifyComposer(state: state, output: output, checks: &checks)
                 await finishVerification(state: state, succeeded: checks.values.allSatisfy { $0 })
@@ -149,6 +153,35 @@ enum AppSmokeVerifier {
             }
         }
         await finishVerification(state: state, succeeded: succeeded)
+    }
+
+    private static func verifyLifecycle(state: AppState, output: URL, checks: inout [String: Bool]) async throws {
+        guard CommandLine.arguments.contains("--manage-models") else {
+            throw AskBaseError.invalidInput("Lifecycle verification requires explicit --manage-models.")
+        }
+        try await wait(until: {
+            NSApp.windows.contains(where: { $0.isVisible && $0.title == "AskBase Local" })
+        }, timeout: 10)
+        checks["embedding_connected"] = state.modelStatus?.embeddingAvailable == true
+        checks["local_answer_model_selected"] = !state.settings.chatModel.isEmpty
+        let mode = CommandLine.arguments.contains("--ui-close-window") ? "last_window"
+            : CommandLine.arguments.contains("--ui-hold-open") ? "external_termination" : "application_quit"
+        let report: [String: Any] = [
+            "checks": checks, "pid": ProcessInfo.processInfo.processIdentifier,
+            "model": state.settings.chatModel, "mode": mode,
+            "library_isolation": "fresh synthetic library explicitly selected at launch",
+            "shutdown_method": "normal AppKit application delegate; externally verify owned processes and ports",
+        ]
+        try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+            .write(to: output.appendingPathComponent("lifecycle-ready.json"), options: .atomic)
+        // Give the external verifier time to inspect the actual resident model.
+        if mode == "external_termination" { return }
+        try await Task.sleep(for: .seconds(4))
+        if mode == "last_window" {
+            NSApp.windows.first(where: { $0.isVisible && $0.title == "AskBase Local" })?.performClose(nil)
+        } else {
+            NSApp.terminate(nil)
+        }
     }
 
     private static func verifyAutoTags(state: AppState, output: URL, checks: inout [String: Bool]) async throws {

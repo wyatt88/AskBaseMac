@@ -20,6 +20,7 @@ struct RootView: View {
             }
         }
         .background(AppPalette.canvas)
+        .disabled(state.isPreparingToQuit)
         .sheet(item: $state.sheet) { item in
             switch item {
             case .knowledgeBase(let base):
@@ -53,6 +54,19 @@ struct RootView: View {
                 .navigationSplitViewColumnWidth(min: 220, ideal: 232, max: 290)
         } detail: {
             VStack(spacing: 0) {
+                if state.modelRuntime.enabled {
+                    HStack(spacing: 8) {
+                        if state.modelRuntime.isBusy { ProgressView().controlSize(.mini) }
+                        Image(systemName: state.modelRuntime.phase == .failed ? "exclamationmark.circle" : "power")
+                        Text(state.modelRuntime.message)
+                            .font(.callout).lineLimit(2).textSelection(.enabled)
+                        Spacer()
+                        Button("模型状态") { state.section = .settings }.buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 24).padding(.vertical, 10)
+                    .background(AppPalette.inset)
+                    Divider()
+                }
                 if state.importActivity != nil || state.importOutcome != nil || state.isReadingDrop
                     || state.reindexActivity != nil {
                     ImportStatusBar()

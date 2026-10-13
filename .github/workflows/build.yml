@@ -13,6 +13,8 @@ jobs:
         run: python3 scripts/test_setup_guards.py
       - name: Check embedding artifact integrity and process ownership
         run: python3 services/embeddinggemma2/scripts/test_deployment_guards.py
+      - name: Check application model lifecycle and orphan cleanup
+        run: python3 services/runtime/test_supervisor.py
       - name: Build native application
         run: python3 scripts/build_app.py
       - uses: actions/upload-artifact@v4

@@ -74,13 +74,18 @@ def start():
             "OLLAMA_MAX_LOADED_MODELS=1", "OLLAMA_KEEP_ALIVE=5m",
             binary, "serve",
         ],
-        "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 30,
+        "RunAtLoad": False, "KeepAlive": False, "ThrottleInterval": 30,
         "StandardOutPath": str(ROOT / "stdout.log"),
         "StandardErrorPath": str(ROOT / "stderr.log"),
         "WorkingDirectory": str(ROOT),
     }
-    if PLIST.exists() and plistlib.loads(PLIST.read_bytes()) != definition:
-        raise SystemExit("An existing launch configuration differs; it was left unchanged.")
+    if PLIST.exists():
+        previous = plistlib.loads(PLIST.read_bytes())
+        # Accept legacy lifecycle policies, while retaining every other
+        # definition check, including exact program arguments and directory.
+        previous.update(RunAtLoad=False, KeepAlive=False)
+        if previous != definition:
+            raise SystemExit("An existing launch configuration differs; it was left unchanged.")
     already_loaded = loaded_identity_matches(definition)
     PLIST.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=PLIST.parent, prefix=LABEL + ".", suffix=".tmp", delete=False) as stream:
@@ -91,9 +96,19 @@ def start():
         temp.replace(PLIST)
     finally:
         temp.unlink(missing_ok=True)
-    command = (["launchctl", "kickstart", f"{DOMAIN}/{LABEL}"] if already_loaded
-               else ["launchctl", "bootstrap", DOMAIN, str(PLIST)])
-    result = subprocess.run(command, capture_output=True, text=True)
+    if not already_loaded:
+        result = subprocess.run(
+            ["launchctl", "bootstrap", DOMAIN, str(PLIST)], capture_output=True, text=True
+        )
+        if result.returncode:
+            raise SystemExit(f"launchd refused to bootstrap the verified job (code {result.returncode}); no fallback job was started.")
+    if not loaded_identity_matches(definition):
+        raise SystemExit("The verified launch job is no longer loaded; no fallback job was started.")
+    # Bootstrap only registers an on-demand job. Never pass -k, which would
+    # terminate a running process; legacy loaded policies await app takeover.
+    result = subprocess.run(
+        ["launchctl", "kickstart", f"{DOMAIN}/{LABEL}"], capture_output=True, text=True
+    )
     if result.returncode:
         raise SystemExit(f"launchd refused to start the verified job (code {result.returncode}); no fallback job was started.")
     for _ in range(20):

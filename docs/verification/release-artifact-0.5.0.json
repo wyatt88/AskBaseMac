@@ -1,0 +1,16 @@
+{
+  "version": "0.5.0",
+  "build": 8,
+  "archive": "AskBase-Local-0.5.0-macOS-arm64.zip",
+  "bytes": 2290522,
+  "sha256": "096c490306ad1bef4c4f05839b52580f27a4e4267bfb979c8dc3df117e021ce6",
+  "binary_sha256": "f46e9a60a76c658dbe593394e1737f06ffe36da46353e53f5ea3bd32775ed9dd",
+  "supervisor_sha256": "fb5973f1cc686c55ab300199e4d2e1591dfd868bbbafa962731ac57f20c295bd",
+  "architecture": "arm64",
+  "configuration": "release",
+  "codesign_verified": true,
+  "zip_integrity_verified": true,
+  "installed_binary_matches": true,
+  "ports_8871_11434_closed": true,
+  "installed_app_running": false
+}

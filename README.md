@@ -80,7 +80,15 @@ python3 scripts/build_app.py --install
 open "$HOME/Applications/AskBase Local.app"
 ```
 
-构建脚本生成真正的 `.app`，安装到 `~/Applications`，并生成 `dist/AskBase-Local-0.4.0-macOS-arm64.zip`。构建副本保存在 `dist/build-products.noindex/`，避免与安装版同时出现在系统应用搜索中；许可文件随应用打包。应用使用本地临时签名，尚未做 Apple 开发者签名、公证或 App Store 发布。其他 Mac 下载预编译版本时可能需要在系统设置中允许打开；也可以直接从源码构建。
+构建脚本生成真正的 `.app`，安装到 `~/Applications`，并生成 `dist/AskBase-Local-0.5.0-macOS-arm64.zip`。构建副本保存在 `dist/build-products.noindex/`，避免与安装版同时出现在系统应用搜索中；许可文件随应用打包。应用使用本地临时签名，尚未做 Apple 开发者签名、公证或 App Store 发布。其他 Mac 下载预编译版本时可能需要在系统设置中允许打开；也可以直接从源码构建。
+
+### 模型随应用启停
+
+0.5.0 起，打开应用会启动本应用专用的 EmbeddingGemma 2 和 Ollama 服务，加载已选择的本地回答模型。关闭最后一个窗口或退出应用，会先取消进行中的工作、保存笔记，再结束这些服务及模型子进程，释放运行内存。模型文件与知识库保留，重新打开时从本机加载，无需再次下载。
+
+升级时会核对并迁移旧版 AskBase 创建的两个后台服务，取消登录自启和自动保活；原配置保存在 `~/Library/Application Support/AskBase/ModelRuntime/LaunchAgentBackups/`。独立管理进程会在 App 崩溃或被强制退出后清理自己启动的模型进程。
+
+自定义地址、其他应用已经启动的 Ollama 或无法确认归属的服务仍由原启动方式管理，设置页会说明这一情况。AskBase 不会为了清理内存而停止其他应用的共享服务。仅显式使用 `--library-path` 打开的隔离资料库默认也不接管服务。
 
 ### EmbeddingGemma 2
 
@@ -162,6 +170,7 @@ python3 scripts/verify_import_formats.py
 - [0.3.0 多模态验收协议](docs/MULTIMODAL-PROTOCOL-0.3.0.md)
 - [0.3.2 输入框与回车发送](docs/CHAT-COMPOSER-0.3.2.md)
 - [0.4.0 自动主题标签](docs/AUTO-TAGS-0.4.0.md)
+- [0.5.0 模型随 App 启停](docs/MODEL-LIFECYCLE-0.5.0.md)
 - [0.3.1 云盘导入修复](docs/CLOUD-IMPORT-FIX-0.3.1.md)
 - [实现契约](docs/IMPLEMENTATION-CONTRACT.md)
 - [独立审查](docs/REVIEW.md)

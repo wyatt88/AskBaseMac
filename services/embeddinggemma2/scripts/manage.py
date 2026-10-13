@@ -43,8 +43,8 @@ def definition():
             str(ROOT / "server.py"),
         ],
         "WorkingDirectory": str(ROOT),
-        "RunAtLoad": True,
-        "KeepAlive": True,
+        "RunAtLoad": False,
+        "KeepAlive": False,
         "ThrottleInterval": 30,
         "ExitTimeOut": 20,
         "StandardOutPath": str(ROOT / "logs/service.stdout.log"),
@@ -56,8 +56,14 @@ def verify_owned_plist():
     if not PLIST.exists():
         return
     value = plistlib.loads(PLIST.read_bytes())
-    if value.get("Label") != LABEL or value.get("ProgramArguments") != definition()["ProgramArguments"]:
+    expected = definition()
+    if (
+        value.get("Label") != LABEL
+        or value.get("ProgramArguments") != expected["ProgramArguments"]
+        or value.get("WorkingDirectory") != expected["WorkingDirectory"]
+    ):
         raise RuntimeError(f"Existing LaunchAgent belongs to another checkout: {PLIST}")
+    return value
 
 
 def loaded():
@@ -116,21 +122,42 @@ def stop():
 
 
 def start():
-    verify_owned_plist()
-    if verify_loaded_identity() is None:
+    data = verify_owned_plist()
+    expected = definition()
+    if data is not None:
+        # Only these two lifecycle policies may differ from an older install.
+        data.update(RunAtLoad=False, KeepAlive=False)
+        if data != expected:
+            raise RuntimeError("Existing LaunchAgent configuration differs; it was left unchanged")
+    else:
+        data = expected
+    already_loaded = verify_loaded_identity() is not None
+    if not already_loaded:
         with socket.socket() as sock:
             if sock.connect_ex((CONFIG["host"], CONFIG["port"])) == 0:
                 raise RuntimeError(f"Port {CONFIG['port']} is already occupied; no process was stopped")
-        data = definition()
-        PLIST.parent.mkdir(parents=True, exist_ok=True)
-        temporary = PLIST.with_suffix(".plist.tmp")
+    # Updating the plist does not reload an already running legacy job. The app
+    # supervisor handles that takeover after verifying ownership.
+    PLIST.parent.mkdir(parents=True, exist_ok=True)
+    temporary = PLIST.with_suffix(".plist.tmp")
+    try:
         temporary.write_bytes(plistlib.dumps(data))
         temporary.chmod(0o600)
         temporary.replace(PLIST)
-        (ROOT / "launchd.plist").write_bytes(plistlib.dumps(data))
+    finally:
+        temporary.unlink(missing_ok=True)
+    (ROOT / "launchd.plist").write_bytes(plistlib.dumps(data))
+    if not already_loaded:
         result = run("bootstrap", DOMAIN, str(PLIST))
         if result.returncode:
-            raise RuntimeError(result.stderr.strip())
+            raise RuntimeError(f"launchd bootstrap failed (code {result.returncode}); no fallback job was started")
+    if verify_loaded_identity() is None:
+        raise RuntimeError("The verified LaunchAgent is no longer loaded; no fallback job was started")
+    # RunAtLoad is disabled, so bootstrap alone does not start a fresh service.
+    # Do not use -k: an already running process must not be killed or restarted.
+    result = run("kickstart", TARGET)
+    if result.returncode:
+        raise RuntimeError(f"launchd kickstart failed (code {result.returncode})")
     deadline = time.monotonic() + 45
     while time.monotonic() < deadline:
         response = health()

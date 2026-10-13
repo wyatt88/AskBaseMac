@@ -1,0 +1,82 @@
+{
+  "version": "0.5.0",
+  "build": 8,
+  "checked_utc": "2026-10-13T03:57:55.001075+00:00",
+  "macos": "27.0.1",
+  "arch": "arm64",
+  "hardware": "Apple M5 Max, 64 GiB unified memory",
+  "core_tests": 191,
+  "setup_tests": 16,
+  "deployment_guard_tests": 19,
+  "supervisor_tests": 37,
+  "supervisor_sha256": "fb5973f1cc686c55ab300199e4d2e1591dfd868bbbafa962731ac57f20c295bd",
+  "cases": [
+    {
+      "mode": "quit",
+      "startup_seconds": 6.29,
+      "embedding_mlx_active_bytes": 2030864539,
+      "resident_models": [
+        {
+          "name": "gemma4:31b-mlx",
+          "size": 19360702484,
+          "size_vram": 19360702484
+        }
+      ],
+      "release_seconds_including_ui_delay": 4.481,
+      "ports_released": true,
+      "owned_processes_exited": true,
+      "passed": true
+    },
+    {
+      "mode": "window",
+      "startup_seconds": 5.85,
+      "embedding_mlx_active_bytes": 2030864539,
+      "resident_models": [
+        {
+          "name": "gemma4:31b-mlx",
+          "size": 19360702324,
+          "size_vram": 19360702324
+        }
+      ],
+      "release_seconds_including_ui_delay": 4.624,
+      "ports_released": true,
+      "owned_processes_exited": true,
+      "passed": true
+    },
+    {
+      "mode": "crash",
+      "startup_seconds": 5.957,
+      "embedding_mlx_active_bytes": 2030864539,
+      "resident_models": [
+        {
+          "name": "gemma4:31b-mlx",
+          "size": 19360702756,
+          "size_vram": 19360702756
+        }
+      ],
+      "release_seconds_including_ui_delay": 0.238,
+      "ports_released": true,
+      "owned_processes_exited": true,
+      "passed": true
+    },
+    {
+      "mode": "startup_quit",
+      "release_seconds_including_ui_delay": 0.413,
+      "ports_released": true,
+      "owned_processes_exited": true,
+      "passed": true
+    }
+  ],
+  "limits": [
+    "DEBUG native AppKit action handlers; not physical mouse/keyboard input",
+    "Isolated empty libraries; no real documents",
+    "Timings are individual observations, not performance guarantees",
+    "Process/port/group absence proves managed process exit, not immediate OS file-cache eviction",
+    "Shared/external services are deliberately not terminated"
+  ],
+  "initial_failures": [
+    "FileHandle.read(upToCount:) delayed small live pipe events until EOF; fixed with POSIX read",
+    "AppKit terminateLater blocked asynchronous quit tasks in actual app; fixed by completing cleanup in the ordinary event loop before final termination",
+    "Darwin disappearing process group EPERM and per-group cleanup failure isolation fixed after offline counterexamples"
+  ]
+}

@@ -39,6 +39,9 @@ def main():
     subprocess.run(["swift", str(ROOT / "scripts/make_icon.swift"), str(icon_directory)], check=True)
     shutil.copy2(icon_directory / "AppIcon.icns", resources)
     shutil.copytree(ROOT / "Examples", resources / "Examples")
+    runtime = resources / "ModelRuntime"
+    runtime.mkdir()
+    shutil.copy2(ROOT / "services/runtime/supervisor.py", runtime / "supervisor.py")
     for notice in ("LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"):
         shutil.copy2(ROOT / notice, resources / notice)
     info = {
@@ -47,8 +50,9 @@ def main():
         "CFBundleDisplayName": "AskBase Local",
         "CFBundleExecutable": "AskBaseMac",
         "CFBundlePackageType": "APPL",
-        "CFBundleShortVersionString": "0.4.0",
-        "CFBundleVersion": "7",
+        "CFBundleShortVersionString": "0.5.0",
+        "CFBundleVersion": "8",
+        "AskBaseDebugBuild": args.debug,
         "CFBundleIconFile": "AppIcon",
         "LSMinimumSystemVersion": "14.0",
         "NSHighResolutionCapable": True,
@@ -59,7 +63,7 @@ def main():
     (bundle / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
     subprocess.run(["codesign", "--force", "--sign", "-", str(bundle)], check=True)
     subprocess.run(["codesign", "--verify", "--deep", "--strict", str(bundle)], check=True)
-    archive = distribution / "AskBase-Local-0.4.0-macOS-arm64.zip"
+    archive = distribution / "AskBase-Local-0.5.0-macOS-arm64.zip"
     if archive.exists():
         archive.unlink()
     subprocess.run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(bundle), str(archive)], check=True)

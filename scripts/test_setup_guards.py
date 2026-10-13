@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import plistlib
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,179 @@ def load(name):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+class OllamaOnDemandTests(unittest.TestCase):
+    def setUp(self):
+        self.module = load("start_ollama")
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        self.module.ROOT = root / "runtime"
+        self.module.PLIST = root / "agents/job.plist"
+        self.module.DOMAIN = "synthetic-domain"
+        self.module.LABEL = "synthetic.ollama"
+        self.target = f"{self.module.DOMAIN}/{self.module.LABEL}"
+        binary = root / "ollama"
+        binary.write_text("synthetic fixture; never executed")
+        self.commands = []
+        self.loaded = False
+        self.running = False
+        self.failure = None
+        self.loaded_changes = {}
+        self.listener = Mock()
+        self.listener.connect_ex.return_value = 1
+        socket = Mock()
+        socket.__enter__ = Mock(return_value=self.listener)
+        socket.__exit__ = Mock(return_value=None)
+        for patcher in (
+            patch.object(self.module.shutil, "which", return_value=str(binary)),
+            patch.object(self.module.socket, "socket", return_value=socket),
+            patch.object(self.module.subprocess, "run", side_effect=self.run_launchctl),
+            patch.object(self.module, "local_models", side_effect=self.local_models),
+            patch.object(self.module.time, "sleep"),
+            patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def local_models(self):
+        if not self.running:
+            raise OSError("synthetic offline service")
+        return []
+
+    def run_launchctl(self, command, **kwargs):
+        self.commands.append(command)
+        if command[0] != "launchctl":
+            raise AssertionError(f"Unexpected offline command: {command!r}")
+        if command[1] == self.failure:
+            return types.SimpleNamespace(returncode=5, stdout="", stderr="SECRET_SENTINEL")
+        if command == ["launchctl", "print", self.target]:
+            if not self.loaded:
+                return types.SimpleNamespace(returncode=113, stdout="", stderr="")
+            data = dict(plistlib.loads(self.module.PLIST.read_bytes()), **self.loaded_changes)
+            output = "\n".join([
+                f"program = {data['ProgramArguments'][0]}",
+                "arguments = {", *data["ProgramArguments"], "}",
+                f"working directory = {data['WorkingDirectory']}",
+                "environment = { SECRET_SENTINEL }",
+            ])
+            return types.SimpleNamespace(returncode=0, stdout=output, stderr="")
+        if command == ["launchctl", "bootstrap", self.module.DOMAIN, str(self.module.PLIST)]:
+            self.loaded = True
+        elif command == ["launchctl", "kickstart", self.target] and self.loaded:
+            self.running = True
+        else:
+            raise AssertionError(f"Unexpected offline command: {command!r}")
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    def mutations(self):
+        return [command for command in self.commands if command[1] != "print"]
+
+    def installed_definition(self):
+        self.module.start()
+        data = plistlib.loads(self.module.PLIST.read_bytes())
+        self.running = False
+        self.commands.clear()
+        return data
+
+    def test_new_install_bootstraps_then_kickstarts_and_verifies_ready(self):
+        self.module.start()
+        self.assertEqual(self.mutations(), [
+            ["launchctl", "bootstrap", self.module.DOMAIN, str(self.module.PLIST)],
+            ["launchctl", "kickstart", self.target],
+        ])
+        data = plistlib.loads(self.module.PLIST.read_bytes())
+        self.assertIs(data["RunAtLoad"], False)
+        self.assertIs(data["KeepAlive"], False)
+        self.assertEqual(self.module.PLIST.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(json.loads(sys.stdout.getvalue())["status"], "running")
+        self.assertFalse(list(self.module.PLIST.parent.glob("*.tmp")))
+
+    def test_only_legacy_policies_change_for_loaded_or_unloaded_jobs(self):
+        expected = self.installed_definition()
+        for loaded in (True, False):
+            for run_at_load, keep_alive in ((True, True), (True, False), (False, True)):
+                with self.subTest(loaded=loaded, policies=(run_at_load, keep_alive)):
+                    previous = dict(expected, RunAtLoad=run_at_load, KeepAlive=keep_alive)
+                    self.module.PLIST.write_bytes(plistlib.dumps(previous))
+                    self.loaded, self.running = loaded, False
+                    self.commands.clear()
+                    self.module.start()
+                    self.assertEqual(plistlib.loads(self.module.PLIST.read_bytes()), expected)
+                    self.assertEqual(
+                        [command[1] for command in self.mutations()],
+                        ["kickstart"] if loaded else ["bootstrap", "kickstart"],
+                    )
+                    self.assertNotIn("-k", self.mutations()[-1])
+
+    def test_nonpolicy_disk_changes_preserve_file_and_never_start_or_stop(self):
+        expected = self.installed_definition()
+        for field, value in (
+            ("Label", "other.label"),
+            ("ProgramArguments", ["/unrelated/binary", "serve"]),
+            ("WorkingDirectory", "/unrelated"),
+            ("StandardOutPath", "/unrelated/log"),
+        ):
+            with self.subTest(field=field):
+                original = plistlib.dumps(dict(expected, **{field: value}, RunAtLoad=True))
+                self.module.PLIST.write_bytes(original)
+                with self.assertRaises(SystemExit):
+                    self.module.start()
+                self.assertEqual(self.module.PLIST.read_bytes(), original)
+                self.assertEqual(self.commands, [])
+
+    def test_foreign_loaded_identity_is_checked_before_migration_and_after_bootstrap(self):
+        expected = self.installed_definition()
+        for loaded in (True, False):
+            for field, value in (
+                ("ProgramArguments", ["/unrelated/binary", "serve"]),
+                ("WorkingDirectory", "/unrelated"),
+            ):
+                with self.subTest(loaded=loaded, field=field):
+                    original = plistlib.dumps(dict(expected, RunAtLoad=True, KeepAlive=True))
+                    self.module.PLIST.write_bytes(original)
+                    self.loaded, self.running = loaded, False
+                    self.loaded_changes = {field: value}
+                    self.commands.clear()
+                    with self.assertRaises(SystemExit) as caught:
+                        self.module.start()
+                    self.assertNotIn("SECRET_SENTINEL", str(caught.exception))
+                    self.assertEqual(
+                        [command[1] for command in self.mutations()], [] if loaded else ["bootstrap"]
+                    )
+                    if loaded:
+                        self.assertEqual(self.module.PLIST.read_bytes(), original)
+
+    def test_kickstart_failure_never_polls_health_or_uses_a_fallback(self):
+        self.failure = "kickstart"
+        with self.assertRaises(SystemExit) as caught:
+            self.module.start()
+        self.assertNotIn("SECRET_SENTINEL", str(caught.exception))
+        self.assertEqual([command[1] for command in self.mutations()], ["bootstrap", "kickstart"])
+        self.module.local_models.assert_called_once_with()
+
+    def test_healthy_external_service_is_reused_without_writes_or_launchctl(self):
+        self.running = True
+        self.module.start()
+        self.assertEqual(json.loads(sys.stdout.getvalue())["status"], "already_running")
+        self.assertEqual(self.commands, [])
+        self.assertFalse(self.module.PLIST.exists())
+        self.module.socket.socket.assert_not_called()
+
+    def test_occupied_unknown_port_is_not_touched(self):
+        self.listener.connect_ex.return_value = 0
+        with self.assertRaisesRegex(SystemExit, "occupied"):
+            self.module.start()
+        self.assertEqual(self.commands, [])
+        self.assertFalse(self.module.PLIST.exists())
+
+    def test_successful_kickstart_is_not_enough_without_ready_api(self):
+        self.module.local_models.side_effect = OSError("synthetic API unavailable")
+        with self.assertRaisesRegex(SystemExit, "did not become ready"):
+            self.module.start()
+        self.assertEqual([command[1] for command in self.mutations()], ["bootstrap", "kickstart"])
+        self.assertEqual(self.module.local_models.call_count, 21)
 
 
 class SetupGuards(unittest.TestCase):

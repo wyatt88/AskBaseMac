@@ -14,7 +14,7 @@ cd "$HOME/Library/Application Support/AskBase/EmbeddingGemma2"
 .venv/bin/python scripts/manage.py restart
 ```
 
-LaunchAgent 名为 `local.askbase.embeddinggemma2`，登录时启动；`uninstall` 子命令移除登录启动配置但保留模型和环境。管理器停止前检查归属，不接管未知端口或后台任务。进程通过干净环境启动，不继承其他应用的云凭据。
+LaunchAgent 名为 `local.askbase.embeddinggemma2`，供命令行显式启动，默认不登录自启、不自动保活；`uninstall` 子命令移除配置但保留模型和环境。0.5.0 起，App 会迁移核实归属的旧常驻服务，并直接管理专用进程：打开加载，退出释放。管理器停止前检查归属，不接管未知端口或后台任务。进程通过干净环境启动，不继承其他应用的云凭据。
 
 API 默认监听 `127.0.0.1:8871`：
 
@@ -89,7 +89,7 @@ python -B scripts/test_deployment_guards.py
 健康文本服务，整合方须另外处理明确的媒体版本升级，不能把它的“已就绪”
 提示当作媒体能力已安装。
 
-Ollama 服务另由 `scripts/start_ollama.py` 准备，LaunchAgent 为 `local.askbasemac.ollama`。如果由本项目脚本创建，可通过以下方式停止并移除登录启动配置；这不删除 Ollama 模型：
+Ollama 服务另由 `scripts/start_ollama.py` 准备，LaunchAgent 为 `local.askbasemac.ollama`，默认不登录自启、不自动保活。App 打开后会接管经过归属校验的专用服务，退出后释放模型。仅在命令行显式启动过该 LaunchAgent 时，可用以下方式停止并移除配置；这不删除 Ollama 模型：
 
 ```sh
 launchctl bootout "gui/$(id -u)/local.askbasemac.ollama"

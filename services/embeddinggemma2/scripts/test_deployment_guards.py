@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Offline guard regression tests; standard library, in-memory fixtures only.
+"""Offline guard regression tests; standard library and isolated fixtures only.
 
 Run: python3 -B scripts/test_deployment_guards.py
 
 The tested functions are extracted from the actual source AST. Neither service
-module is imported. No models, network, launchctl, subprocesses, real plist
-files, or temporary files are used.
+module is imported. No models, network, launchctl, subprocesses, or real
+LaunchAgents are used. Startup tests write only to temporary directories.
 """
 
 import ast
@@ -18,8 +18,10 @@ from pathlib import Path
 import plistlib
 import re
 import sys
+import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -147,10 +149,14 @@ class FakeLaunchctl:
         self.target = target
         self.output = output
         self.is_loaded = loaded
+        self.started = False
+        self.failure = None
         self.calls = []
 
     def run(self, *arguments):
         self.calls.append(arguments)
+        if arguments[0] == self.failure:
+            return SimpleNamespace(returncode=5, stdout="", stderr=SYNTHETIC_PRIVATE_VALUE)
         if arguments == ("print", self.target):
             return SimpleNamespace(
                 returncode=0 if self.is_loaded else 113,
@@ -159,6 +165,12 @@ class FakeLaunchctl:
             )
         if arguments == ("bootout", self.target):
             self.is_loaded = False
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if arguments[0] == "bootstrap" and arguments[1] == self.target.rsplit("/", 1)[0]:
+            self.is_loaded = True
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if arguments == ("kickstart", self.target) and self.is_loaded:
+            self.started = True
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         raise AssertionError(f"Unexpected command in offline test: {arguments!r}")
 
@@ -293,10 +305,169 @@ class LoadedJobOwnershipTests(unittest.TestCase):
     def test_foreign_disk_plist_is_also_rejected(self):
         namespace, job, _ = manager_fixture(foreign_disk_plist=True)
         self.assert_refused_without_bootout_or_raw_dump(namespace, job)
+        namespace, job, _ = manager_fixture()
+        namespace["PLIST"].definition["WorkingDirectory"] = "/other-checkout"
+        self.assert_refused_without_bootout_or_raw_dump(namespace, job)
+
+
+class OnDemandStartupTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name) / "runtime"
+        root.mkdir()
+        self.plist = Path(directory.name) / "agents/job.plist"
+        self.listener = Mock()
+        self.listener.connect_ex.return_value = 1
+        socket = Mock()
+        socket.return_value.__enter__ = Mock(return_value=self.listener)
+        socket.return_value.__exit__ = Mock(return_value=None)
+        self.namespace = {
+            "ROOT": root,
+            "LABEL": "synthetic.eg2",
+            "DOMAIN": "synthetic-domain",
+            "TARGET": "synthetic-domain/synthetic.eg2",
+            "PLIST": self.plist,
+            "CONFIG": {
+                "host": "127.0.0.1", "port": 8871,
+                "revision": "fixture-revision", "model_id": "embeddinggemma-2",
+            },
+            "plistlib": plistlib,
+            "re": re,
+            "time": FakeClock(),
+            "socket": SimpleNamespace(socket=socket),
+        }
+        extract_functions(
+            MANAGER_PATH,
+            ["definition", "verify_owned_plist", "verify_loaded_identity", "start"],
+            self.namespace,
+        )
+        self.expected = self.namespace["definition"]()
+        self.job = FakeLaunchctl(
+            self.namespace["TARGET"], launchctl_fixture(self.expected), loaded=False
+        )
+        self.namespace["run"] = self.job.run
+        self.ready = {
+            "status": "ok", "revision": "fixture-revision", "model": "embeddinggemma-2",
+        }
+        self.health = Mock(side_effect=lambda: self.ready if self.job.started else None)
+        self.namespace["health"] = self.health
+
+    def write_plist(self, data):
+        self.plist.parent.mkdir(parents=True, exist_ok=True)
+        self.plist.write_bytes(plistlib.dumps(data))
+        return self.plist.read_bytes()
+
+    def mutations(self):
+        return [call for call in self.job.calls if call[0] != "print"]
+
+    def test_new_install_registers_then_explicitly_starts_before_ready(self):
+        self.assertEqual(self.namespace["start"](), self.ready)
+        self.assertEqual(self.mutations(), [
+            ("bootstrap", self.namespace["DOMAIN"], str(self.plist)),
+            ("kickstart", self.namespace["TARGET"]),
+        ])
+        installed = plistlib.loads(self.plist.read_bytes())
+        self.assertIs(installed["RunAtLoad"], False)
+        self.assertIs(installed["KeepAlive"], False)
+        self.assertEqual(installed, self.expected)
+        self.assertEqual(self.plist.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(
+            (self.namespace["ROOT"] / "launchd.plist").read_bytes(), self.plist.read_bytes()
+        )
+        self.health.assert_called_once_with()
+        self.assertFalse(list(self.plist.parent.glob("*.tmp")))
+
+    def test_legacy_policies_migrate_without_restarting_loaded_job(self):
+        for loaded in (False, True):
+            for run_at_load, keep_alive in ((True, True), (True, False), (False, True)):
+                with self.subTest(loaded=loaded, policies=(run_at_load, keep_alive)):
+                    previous = dict(self.expected, RunAtLoad=run_at_load, KeepAlive=keep_alive)
+                    self.write_plist(previous)
+                    self.job.is_loaded = loaded
+                    self.job.started = False
+                    self.job.calls.clear()
+                    self.assertEqual(self.namespace["start"](), self.ready)
+                    self.assertEqual(plistlib.loads(self.plist.read_bytes()), self.expected)
+                    self.assertEqual(
+                        [call[0] for call in self.mutations()],
+                        ["kickstart"] if loaded else ["bootstrap", "kickstart"],
+                    )
+                    self.assertNotIn("-k", self.mutations()[-1])
+
+    def test_nonpolicy_disk_changes_refuse_start_and_preserve_file(self):
+        for field, value in (
+            ("Label", "other.label"),
+            ("ProgramArguments", ["/other/python", "/other/server.py"]),
+            ("WorkingDirectory", "/other-checkout"),
+            ("StandardOutPath", "/other/log"),
+        ):
+            with self.subTest(field=field):
+                original = self.write_plist(dict(self.expected, **{field: value}))
+                with self.assertRaises(RuntimeError):
+                    self.namespace["start"]()
+                self.assertEqual(self.plist.read_bytes(), original)
+                self.assertEqual(self.job.calls, [])
+                self.health.assert_not_called()
+
+    def test_foreign_loaded_job_refuses_start_before_policy_write(self):
+        for field, value in (
+            ("program", "/other/python"),
+            ("arguments", ["/other/python", "/other/server.py"]),
+            ("working_directory", "/other-checkout"),
+        ):
+            with self.subTest(field=field):
+                original = self.write_plist(dict(self.expected, RunAtLoad=True, KeepAlive=True))
+                self.job.output = launchctl_fixture(self.expected, {field: value})
+                self.job.is_loaded = True
+                with self.assertRaises(RuntimeError):
+                    self.namespace["start"]()
+                self.assertEqual(self.plist.read_bytes(), original)
+                self.assertEqual(self.mutations(), [])
+                self.assertTrue(self.job.is_loaded)
+                self.health.assert_not_called()
+
+    def test_bootstrap_or_kickstart_failure_does_not_fall_back_or_poll_health(self):
+        for operation in ("bootstrap", "kickstart"):
+            with self.subTest(operation=operation):
+                self.job.is_loaded = False
+                self.job.failure = operation
+                self.job.calls.clear()
+                with self.assertRaisesRegex(RuntimeError, operation) as caught:
+                    self.namespace["start"]()
+                self.assertNotIn(SYNTHETIC_PRIVATE_VALUE, str(caught.exception))
+                self.assertEqual(
+                    [call[0] for call in self.mutations()],
+                    ["bootstrap"] if operation == "bootstrap" else ["bootstrap", "kickstart"],
+                )
+                self.health.assert_not_called()
+
+    def test_identity_is_rechecked_after_bootstrap_before_kickstart(self):
+        self.job.output = launchctl_fixture(self.expected, {"working_directory": "/other-checkout"})
+        with self.assertRaises(RuntimeError):
+            self.namespace["start"]()
+        self.assertEqual([call[0] for call in self.mutations()], ["bootstrap"])
+        self.health.assert_not_called()
+
+    def test_occupied_port_never_writes_or_starts_or_stops_a_job(self):
+        self.listener.connect_ex.return_value = 0
+        with self.assertRaisesRegex(RuntimeError, "already occupied"):
+            self.namespace["start"]()
+        self.assertFalse(self.plist.exists())
+        self.assertEqual(self.mutations(), [])
+        self.health.assert_not_called()
+
+    def test_kickstart_success_still_requires_matching_service_health(self):
+        self.health.side_effect = None
+        self.health.return_value = dict(self.ready, revision="other-revision")
+        with self.assertRaisesRegex(RuntimeError, "did not become ready"):
+            self.namespace["start"]()
+        self.assertEqual([call[0] for call in self.mutations()], ["bootstrap", "kickstart"])
+        self.assertEqual(self.namespace["time"].monotonic(), 45)
 
 
 if __name__ == "__main__":
-    print("OFFLINE: AST-extracted guards; in-memory files and launchctl only", file=sys.stderr)
+    print("OFFLINE: AST-extracted guards; synthetic files and launchctl only", file=sys.stderr)
     for source, digest in SOURCE_HASHES.items():
         print(f"Source SHA256 {source}: {digest}", file=sys.stderr)
     unittest.main(verbosity=2)
